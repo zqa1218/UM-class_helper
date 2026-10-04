@@ -173,4 +173,4 @@ npm run calendar
 
 ## 许可
 
-尚未指定许可证。在添加之前，默认保留所有权利。
+[MIT](LICENSE)。

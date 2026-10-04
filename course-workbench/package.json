@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
   "description": "本地课程工作台：每门课一个项目，持续接入录音与课件，产出知识大纲、笔记与题库。",
   "scripts": {
     "dev": "concurrently -n web,api -c cyan,magenta \"vite\" \"node server/index.mjs\"",
