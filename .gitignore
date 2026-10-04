@@ -1,0 +1,23 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.vite/
+
+# 课程数据：含个人笔记、录音、课件、学校文件，不进公开仓库
+courses/
+calendars/*.local.json
+
+# 本地配置（含机器相关路径与沙箱设置）
+course-workbench/workbench.config.json
+
+# 密钥与本地环境
+.env
+.env.*
+*.pem
+*.key
+
+# 日志与临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
