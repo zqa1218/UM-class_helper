@@ -2,6 +2,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { coursePaths, readJson, writeJson } from './courses.mjs'
 
@@ -193,7 +194,7 @@ const STAGE_TASKS = {
   },
 }
 
-export const FULL_PIPELINE = 'full'
+const FULL_PIPELINE = 'full'
 
 function buildPrompt(course, stageKey, instruction) {
   const task = STAGE_TASKS[stageKey]
@@ -269,10 +270,12 @@ function jobPaths(root, courseId, id) {
   }
 }
 
-async function loadConfig(root) {
+/** 配置文件固定在应用根目录，不跟着 courseRoot 走，否则两处会读到不同的文件。 */
+const CONFIG_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'workbench.config.json')
+
+async function loadConfig() {
   if (cachedConfig) return cachedConfig
-  const file = path.join(root, '..', 'workbench.config.json')
-  cachedConfig = (await readJson(file)) || {}
+  cachedConfig = (await readJson(CONFIG_PATH)) || {}
   return cachedConfig
 }
 
@@ -298,15 +301,38 @@ export async function getJob(root, courseId, id) {
   return readJson(jobPaths(root, courseId, id).meta)
 }
 
-export async function getJobLog(root, courseId, id, tail) {
+/**
+ * 只读日志尾部：长任务的 jsonl 日志可能很大，整份读进内存没必要。
+ * ponytail: 按行数估算读取窗口（每行约 200 字节，下限 128 KB），行特别长时可能少几行。
+ */
+async function readTail(file, tail) {
+  let handle
   try {
-    const raw = await fsp.readFile(jobPaths(root, courseId, id).log, 'utf8')
-    if (!tail) return raw
-    const lines = raw.split('\n')
+    handle = await fsp.open(file, 'r')
+    const { size } = await handle.stat()
+    const window = Math.min(size, Math.max(128 * 1024, tail * 200))
+    const buffer = Buffer.alloc(window)
+    const { bytesRead } = await handle.read(buffer, 0, window, size - window)
+    const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n')
+    if (window < size) lines.shift() // 从中间截断的首行不完整
     return lines.slice(Math.max(0, lines.length - tail)).join('\n')
   } catch {
     return ''
+  } finally {
+    await handle?.close()
   }
+}
+
+export async function getJobLog(root, courseId, id, tail) {
+  const file = jobPaths(root, courseId, id).log
+  if (!tail) {
+    try {
+      return await fsp.readFile(file, 'utf8')
+    } catch {
+      return ''
+    }
+  }
+  return readTail(file, Number(tail))
 }
 
 async function patchJob(root, courseId, id, patch) {
@@ -321,7 +347,7 @@ async function patchJob(root, courseId, id, patch) {
 export async function createJob(root, courseId, input) {
   const course = await readJson(coursePaths(root, courseId).meta)
   if (!course) throw new Error('课程不存在')
-  const stageKey = input.stage === FULL_PIPELINE ? FULL_PIPELINE : String(input.stage || '')
+  const stageKey = String(input.stage || '')
   if (stageKey !== FULL_PIPELINE && !STAGE_TASKS[stageKey]) {
     throw new Error('未知阶段：' + stageKey)
   }
@@ -387,7 +413,7 @@ function describeEvent(event) {
 }
 
 async function runJob(root, courseId, id) {
-  const config = await loadConfig(root)
+  const config = await loadConfig()
   const paths = jobPaths(root, courseId, id)
   const job = await readJson(paths.meta)
   if (!job) return

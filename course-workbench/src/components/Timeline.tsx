@@ -1,27 +1,7 @@
 import { useMemo, useState } from 'react'
 
+import { KIND_LABEL, dateTime, daysUntil } from '../milestone'
 import type { Course, Milestone, MilestoneKind } from '../types'
-
-const KIND_LABEL: Record<MilestoneKind, string> = {
-  lecture: '讲课',
-  deadline: '截止',
-  exam: '考试',
-  reading: '阅读',
-  other: '其他',
-}
-
-function parseDate(value: string): number {
-  const time = Date.parse(`${value}T00:00:00`)
-  return Number.isNaN(time) ? NaN : time
-}
-
-function daysUntil(date: string): number {
-  const target = parseDate(date)
-  if (Number.isNaN(target)) return NaN
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return Math.round((target - today.getTime()) / 86400000)
-}
 
 interface Props {
   course: Course
@@ -40,15 +20,15 @@ export default function Timeline({ course, onSave }: Props) {
   const schedule = course.schedule || []
 
   const range = useMemo(() => {
-    const dates = schedule.map((m) => parseDate(m.date)).filter((n) => !Number.isNaN(n))
-    const start = parseDate(course.startDate) || (dates.length ? Math.min(...dates) : NaN)
-    const end = parseDate(course.endDate) || (dates.length ? Math.max(...dates) : NaN)
+    const dates = schedule.map((m) => dateTime(m.date)).filter((n) => !Number.isNaN(n))
+    const start = dateTime(course.startDate) || (dates.length ? Math.min(...dates) : NaN)
+    const end = dateTime(course.endDate) || (dates.length ? Math.max(...dates) : NaN)
     return { start, end }
   }, [schedule, course.startDate, course.endDate])
 
   const span = range.end - range.start
   const ratio = (date: string) => {
-    const time = parseDate(date)
+    const time = dateTime(date)
     if (Number.isNaN(time) || Number.isNaN(span) || span <= 0) return 0
     return Math.min(1, Math.max(0, (time - range.start) / span))
   }
@@ -164,7 +144,7 @@ export default function Timeline({ course, onSave }: Props) {
               <span className="milestone-row__title">{milestone.title}</span>
               {milestone.note && <div className="milestone-row__note">{milestone.note}</div>}
             </span>
-            <span style={{ display: 'flex', gap: 6 }}>
+            <span className="inline-actions">
               <span className="mono">{KIND_LABEL[milestone.kind]}</span>
               <button className="btn" type="button" onClick={() => toggleDone(milestone.id)}>
                 {milestone.done ? '撤销' : '完成'}

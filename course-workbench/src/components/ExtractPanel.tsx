@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../api'
+import { errorMessage } from '../loader'
+import { DATE_LIKE, KIND_OPTIONS as KINDS, addDaysIso } from '../milestone'
 import type {
   Course,
   ExtractedCourse,
@@ -22,22 +24,6 @@ const TEXT_FIELDS: { key: keyof ExtractedCourse; label: string; type?: string }[
   { key: 'endDate', label: '学期结束', type: 'date' },
 ]
 
-const KINDS: { value: MilestoneKind; label: string }[] = [
-  { value: 'lecture', label: '讲课' },
-  { value: 'deadline', label: '截止' },
-  { value: 'exam', label: '考试' },
-  { value: 'reading', label: '阅读' },
-  { value: 'other', label: '其他' },
-]
-
-const DATE_LIKE = /^\d{4}-\d{2}-\d{2}$/
-
-function addDays(date: string, days: number): string {
-  const value = new Date(`${date}T00:00:00`)
-  value.setDate(value.getDate() + days)
-  return value.toISOString().slice(0, 10)
-}
-
 /** 大纲只写周次时，按「学期起始日 + (周次-1) 周」推算每周日期。 */
 function weeklyToSchedule(
   weekly: WeeklyItem[] | undefined,
@@ -47,7 +33,7 @@ function weeklyToSchedule(
   return weekly
     .filter((item) => Number(item.week) > 0)
     .map((item) => ({
-      date: addDays(startDate, (Number(item.week) - 1) * 7),
+      date: addDaysIso(startDate, (Number(item.week) - 1) * 7),
       title: `第 ${item.week} 周 · ${item.topic || '未命名主题'}`,
       kind: 'lecture' as MilestoneKind,
       note: item.instructor ? `授课：${item.instructor}` : '',
@@ -108,7 +94,7 @@ export default function ExtractPanel({ course, onApplied, onStarted }: Props) {
       }
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
     }
   }, [course.id])
 
@@ -134,7 +120,7 @@ export default function ExtractPanel({ course, onApplied, onStarted }: Props) {
       setRunning(true)
       onStarted()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -168,7 +154,7 @@ export default function ExtractPanel({ course, onApplied, onStarted }: Props) {
       onApplied(updated)
       setExtracted((current) => (current ? { ...current, appliedAt: 'now' } : current))
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
     } finally {
       setBusy(false)
     }

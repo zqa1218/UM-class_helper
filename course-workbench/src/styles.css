@@ -304,13 +304,6 @@ a {
   scroll-margin-top: 64px;
 }
 
-.panel-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 30px;
-  align-items: start;
-}
-
 @media (max-width: 1080px) {
   .app {
     grid-template-columns: 1fr;
@@ -326,9 +319,6 @@ a {
     margin-top: 0;
     border-top: none;
     padding-top: 0;
-  }
-  .panel-split {
-    grid-template-columns: 1fr;
   }
   .panel,
   .course-header,
@@ -1002,12 +992,42 @@ a {
   color: var(--due);
 }
 
+/* 面板标题行：标题 + 刷新/操作按钮 */
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-label {
+  color: var(--ink-500);
+}
+
+/* 选中态交给 aria-pressed，按钮自己不再写内联样式 */
+.btn[aria-pressed='true'] {
+  border-color: var(--signal);
+  background: var(--signal-soft);
+}
+
+.level-tag--due {
+  border-color: #e0b3bc;
+  color: var(--due);
+}
+
 .graph-box {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--card);
   padding: 18px;
   overflow: auto;
+  margin-bottom: 16px;
 }
 
 /* ── 课程档案 ──────────────────────────────── */

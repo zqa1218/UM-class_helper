@@ -1,9 +1,27 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
-import type { Course } from '../types'
+import type { AssessmentItem, Cilo, Citation, Course, Instructor } from '../types'
 
 interface Props {
   course: Course
+}
+
+/** 空列表统一显示占位符。 */
+function ProfileList<T>({
+  items,
+  render,
+}: {
+  items: T[]
+  render: (item: T, index: number) => ReactNode
+}) {
+  if (!items.length) return <p className="muted">—</p>
+  return (
+    <ul className="profile-plain">
+      {items.map((item, index) => (
+        <li key={index}>{render(item, index)}</li>
+      ))}
+    </ul>
+  )
 }
 
 export default function CourseProfile({ course }: Props) {
@@ -42,9 +60,7 @@ export default function CourseProfile({ course }: Props) {
 
       <div className="profile-grid">
         <div>
-          <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-            1 课程信息
-          </div>
+          <div className="spine__label profile-label">1 课程信息</div>
           <dl className="profile-list">
             <dt>课程代码</dt>
             <dd>{course.code || '—'}</dd>
@@ -75,72 +91,55 @@ export default function CourseProfile({ course }: Props) {
         </div>
 
         <div>
-          <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-            2 授课信息
-          </div>
-          {(course.instructors || []).length === 0 ? (
-            <p className="muted">—</p>
-          ) : (
-            <ul className="profile-plain">
-              {course.instructors.map((person, index) => (
-                <li key={index}>
-                  <strong>{person.name || '未署名'}</strong>
-                  <span className="mono">
-                    {person.officeHours ? `　答疑 ${person.officeHours}` : ''}
-                    {person.office ? `　办公室 ${person.office}` : ''}
-                  </span>
-                  <div className="mono">
-                    {person.email || ''}
-                    {person.phone ? `　${person.phone}` : ''}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className="spine__label profile-label">2 授课信息</div>
+          <ProfileList
+            items={course.instructors || []}
+            render={(person: Instructor) => (
+              <>
+                <strong>{person.name || '未署名'}</strong>
+                <span className="mono">
+                  {person.officeHours ? `　答疑 ${person.officeHours}` : ''}
+                  {person.office ? `　办公室 ${person.office}` : ''}
+                </span>
+                <div className="mono">
+                  {person.email || ''}
+                  {person.phone ? `　${person.phone}` : ''}
+                </div>
+              </>
+            )}
+          />
         </div>
 
         <div>
-          <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-            3 预期学习成果 CILO
-          </div>
-          {(course.cilos || []).length === 0 ? (
-            <p className="muted">—</p>
-          ) : (
-            <ul className="profile-plain">
-              {course.cilos.map((item, index) => (
-                <li key={index}>
-                  <span className="mono">{item.id || `CILO-${index + 1}`}</span>　{item.text}
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className="spine__label profile-label">3 预期学习成果 CILO</div>
+          <ProfileList
+            items={course.cilos || []}
+            render={(item: Cilo, index: number) => (
+              <>
+                <span className="mono">{item.id || `CILO-${index + 1}`}</span>　{item.text}
+              </>
+            )}
+          />
         </div>
 
         <div>
-          <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-            4 考核方式
-          </div>
-          {(course.assessment || []).length === 0 ? (
-            <p className="muted">—</p>
-          ) : (
-            <ul className="profile-plain">
-              {course.assessment.map((item, index) => (
-                <li key={index}>
-                  <span>{item.name}</span>
-                  <span className="mono" style={{ marginLeft: 8 }}>
-                    {item.weight}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className="spine__label profile-label">4 考核方式</div>
+          <ProfileList
+            items={course.assessment || []}
+            render={(item: AssessmentItem) => (
+              <>
+                <span>{item.name}</span>
+                <span className="mono" style={{ marginLeft: 8 }}>
+                  {item.weight}
+                </span>
+              </>
+            )}
+          />
         </div>
       </div>
 
       <div style={{ marginTop: 22 }}>
-        <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-          6 周次安排（{(course.weekly || []).length} 周）
-        </div>
+        <div className="spine__label profile-label">6 周次安排（{(course.weekly || []).length} 周）</div>
         {(course.weekly || []).length === 0 ? (
           <p className="muted">—</p>
         ) : (
@@ -176,32 +175,18 @@ export default function CourseProfile({ course }: Props) {
 
       <div className="profile-grid" style={{ marginTop: 22 }}>
         <div>
-          <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-            7 教材
-          </div>
-          {(course.textbooks || []).length === 0 ? (
-            <p className="muted">—</p>
-          ) : (
-            <ul className="profile-plain">
-              {course.textbooks.map((item, index) => (
-                <li key={index}>{item.citation}</li>
-              ))}
-            </ul>
-          )}
+          <div className="spine__label profile-label">7 教材</div>
+          <ProfileList
+            items={course.textbooks || []}
+            render={(item: Citation) => item.citation}
+          />
         </div>
         <div>
-          <div className="spine__label" style={{ color: 'var(--ink-500)' }}>
-            7 参考书
-          </div>
-          {(course.references || []).length === 0 ? (
-            <p className="muted">—</p>
-          ) : (
-            <ul className="profile-plain">
-              {course.references.map((item, index) => (
-                <li key={index}>{item.citation}</li>
-              ))}
-            </ul>
-          )}
+          <div className="spine__label profile-label">7 参考书</div>
+          <ProfileList
+            items={course.references || []}
+            render={(item: Citation) => item.citation}
+          />
         </div>
       </div>
     </section>

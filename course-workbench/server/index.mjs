@@ -25,7 +25,6 @@ import {
 import { listCalendars, refreshCalendar } from './calendar.mjs'
 import { buildTextbookScaffold, listTextbooks } from './textbooks.mjs'
 import {
-  FULL_PIPELINE,
   cancelJob,
   createJob,
   getJob,
@@ -40,7 +39,8 @@ const appRoot = path.resolve(here, '..')
 
 const config = (await readJson(path.join(appRoot, 'workbench.config.json'))) || {}
 const PORT = Number(process.env.PORT || config.port || 8787)
-const COURSE_ROOT = path.resolve(appRoot, config.courseRoot || './courses')
+// COURSE_ROOT 可以用环境变量覆盖，冒烟测试用它指向临时目录
+const COURSE_ROOT = path.resolve(appRoot, process.env.COURSE_ROOT || config.courseRoot || './courses')
 const CALENDAR_ROOT = path.resolve(appRoot, config.calendarRoot || './calendars')
 
 const MIME = {

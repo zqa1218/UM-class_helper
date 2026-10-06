@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 
+import { errorMessage } from '../loader'
 import type { Course } from '../types'
 
 interface Props {
@@ -43,7 +44,7 @@ export default function NewCourse({ onCreate, onCancel }: Props) {
           .filter(Boolean),
       }, files)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
       setBusy(false)
     }
   }

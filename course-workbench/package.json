@@ -11,6 +11,7 @@
     "dev:api": "node server/index.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "node server/index.mjs",
+    "smoke": "node scripts/smoke-test.mjs",
     "calendar": "node scripts/refresh-calendars.mjs"
   },
   "dependencies": {

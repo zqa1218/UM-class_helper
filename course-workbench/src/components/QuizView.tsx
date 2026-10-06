@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { api } from '../api'
+import { useLoader } from '../loader'
 import type { QuizItem } from '../types'
+import Panel from './Panel'
 
 interface Props {
   courseId: string
@@ -15,30 +17,20 @@ const TYPE_LABEL: Record<string, string> = {
 }
 
 export default function QuizView({ courseId }: Props) {
-  const [items, setItems] = useState<QuizItem[]>([])
   const [tag, setTag] = useState('')
   const [onlyWrong, setOnlyWrong] = useState(false)
   const [revealed, setRevealed] = useState<Record<string, boolean>>({})
   const [picked, setPicked] = useState<Record<string, string[]>>({})
   const [result, setResult] = useState<Record<string, boolean>>({})
-  const [loading, setLoading] = useState(true)
-  const [message, setMessage] = useState('')
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const { data, loading, reload } = useLoader(async () => {
     try {
-      setItems(await api.loadBank(courseId))
-      setMessage('')
+      return { items: await api.loadBank(courseId), missing: false }
     } catch {
-      setItems([])
-      setMessage('还没有题库。先在大纲里选好范围，再跑一次「出题」任务。')
+      return { items: [] as QuizItem[], missing: true }
     }
-    setLoading(false)
   }, [courseId])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const items = useMemo(() => data?.items || [], [data])
 
   const tags = useMemo(() => {
     const set = new Set<string>()
@@ -97,19 +89,25 @@ export default function QuizView({ courseId }: Props) {
   }
 
   return (
-    <section>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <h2 className="section-title">题库练习</h2>
-        <button className="btn" type="button" onClick={() => void load()}>
-          刷新
-        </button>
+    <Panel
+      title="题库练习"
+      hint="默认练习模式：先答题，再显示答案与解析。作答结果会记回题库，用于错题重练。"
+      onRefresh={() => void reload()}
+      loading={loading}
+      loadingText="正在读取题库…"
+      empty={
+        data?.missing
+          ? '还没有题库。先在大纲里选好范围，再跑一次「出题」任务。'
+          : visible.length === 0
+            ? '这个范围里还没有题。'
+            : undefined
+      }
+      actions={
         <button className="btn" type="button" onClick={reset}>
           重做本页
         </button>
-      </div>
-      <p className="section-hint">
-        默认练习模式：先答题，再显示答案与解析。作答结果会记回题库，用于错题重练。
-      </p>
+      }
+    >
 
       <div className="field-row" style={{ maxWidth: 640, marginBottom: 10 }}>
         <div className="field">
@@ -141,8 +139,8 @@ export default function QuizView({ courseId }: Props) {
               key={entry}
               type="button"
               className="btn"
+              aria-pressed={entry === tag}
               onClick={() => setTag(entry)}
-              style={entry === tag ? { borderColor: 'var(--signal)', background: 'var(--signal-soft)' } : undefined}
             >
               {entry}
             </button>
@@ -150,78 +148,72 @@ export default function QuizView({ courseId }: Props) {
         </div>
       )}
 
-      {loading ? (
-        <p className="muted">正在读取题库…</p>
-      ) : visible.length === 0 ? (
-        <div className="empty">{message || '这个范围里还没有题。'}</div>
-      ) : (
-        <>
-          <p className="mono">共 {visible.length} 题</p>
-          {visible.map((item) => {
-            const shown = revealed[item.id]
-            const chosen = picked[item.id] || []
-            const answer = (item.answer || []).map((entry) => String(entry).trim().toUpperCase())
-            return (
-              <article className="quiz-item" key={item.id}>
-                <div className="quiz-item__meta">
-                  <span>{item.id}</span>
-                  <span>{TYPE_LABEL[item.type] || item.type}</span>
-                  {item.difficulty && <span>{item.difficulty}</span>}
-                  <span>{(item.pointIds || []).join('、')}</span>
-                  {item.isExtension && <span>拓展</span>}
-                </div>
-                <p className="quiz-item__stem">{item.stem}</p>
-                {item.options &&
-                  Object.entries(item.options).map(([key, text]) => {
-                    const letter = key.toUpperCase()
-                    const isPicked = chosen.includes(letter)
-                    const isAnswer = answer.includes(letter)
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        className="option"
-                        data-picked={isPicked}
-                        data-correct={shown && isAnswer}
-                        data-wrong={shown && isPicked && !isAnswer}
-                        onClick={() => togglePick(item, letter)}
-                      >
-                        <span className="option__key">{letter}</span>
-                        <span>{text}</span>
-                      </button>
-                    )
-                  })}
-                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {!shown ? (
+      <>
+        <p className="mono">共 {visible.length} 题</p>
+        {visible.map((item) => {
+          const shown = revealed[item.id]
+          const chosen = picked[item.id] || []
+          const answer = (item.answer || []).map((entry) => String(entry).trim().toUpperCase())
+          return (
+            <article className="quiz-item" key={item.id}>
+              <div className="quiz-item__meta">
+                <span>{item.id}</span>
+                <span>{TYPE_LABEL[item.type] || item.type}</span>
+                {item.difficulty && <span>{item.difficulty}</span>}
+                <span>{(item.pointIds || []).join('、')}</span>
+                {item.isExtension && <span>拓展</span>}
+              </div>
+              <p className="quiz-item__stem">{item.stem}</p>
+              {item.options &&
+                Object.entries(item.options).map(([key, text]) => {
+                  const letter = key.toUpperCase()
+                  const isPicked = chosen.includes(letter)
+                  const isAnswer = answer.includes(letter)
+                  return (
                     <button
-                      className="btn btn--primary"
+                      key={key}
                       type="button"
-                      onClick={() => void reveal(item)}
-                      disabled={chosen.length === 0}
+                      className="option"
+                      data-picked={isPicked}
+                      data-correct={shown && isAnswer}
+                      data-wrong={shown && isPicked && !isAnswer}
+                      onClick={() => togglePick(item, letter)}
                     >
-                      显示答案
+                      <span className="option__key">{letter}</span>
+                      <span>{text}</span>
                     </button>
-                  ) : (
-                    <span className="mono">
-                      答案：{answer.join('、')}　{result[item.id] ? '答对了' : '再看看解析'}
-                    </span>
+                  )
+                })}
+              <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                {!shown ? (
+                  <button
+                    className="btn btn--primary"
+                    type="button"
+                    onClick={() => void reveal(item)}
+                    disabled={chosen.length === 0}
+                  >
+                    显示答案
+                  </button>
+                ) : (
+                  <span className="mono">
+                    答案：{answer.join('、')}　{result[item.id] ? '答对了' : '再看看解析'}
+                  </span>
+                )}
+              </div>
+              {shown && item.explanation && (
+                <div className="explain">
+                  {item.explanation}
+                  {(item.sources || []).length > 0 && (
+                    <div className="mono" style={{ marginTop: 6 }}>
+                      溯源：{item.sources?.join('；')}
+                    </div>
                   )}
                 </div>
-                {shown && item.explanation && (
-                  <div className="explain">
-                    {item.explanation}
-                    {(item.sources || []).length > 0 && (
-                      <div className="mono" style={{ marginTop: 6 }}>
-                        溯源：{item.sources?.join('；')}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </article>
-            )
-          })}
-        </>
-      )}
-    </section>
+              )}
+            </article>
+          )
+        })}
+      </>
+    </Panel>
   )
 }

@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api } from '../api'
-import type { Course, FileEntry, TextbookEntry } from '../types'
+import { errorMessage, useLoader } from '../loader'
+import type { Course, FileEntry } from '../types'
+import Panel from './Panel'
 
 type StageKey = '00_source' | '10_kb'
 
@@ -28,13 +30,22 @@ interface Props {
 
 export default function Materials({ course, onChanged, onExtract }: Props) {
   const [stage, setStage] = useState<StageKey>('00_source')
-  const [files, setFiles] = useState<FileEntry[]>([])
   const [selected, setSelected] = useState<string>('')
   const [dragging, setDragging] = useState(false)
   const [uploads, setUploads] = useState<{ name: string; state: string }[]>([])
-  const [books, setBooks] = useState<TextbookEntry[]>([])
-  const [error, setError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const { data: fileData, error, reload: load } = useLoader(
+    async () => (await api.listFiles(course.id, stage)).files,
+    [course.id, stage],
+  )
+  const files = useMemo(() => fileData || [], [fileData])
+
+  const { data: bookData, reload: loadBooks } = useLoader(async () => {
+    if (stage !== '10_kb') return null
+    return (await api.listTextbooks(course.id)).books
+  }, [course.id, stage])
+  const books = bookData || []
 
   const weeks = useMemo<WeekRow[]>(() => {
     const nodes = course.schedule || []
@@ -69,35 +80,6 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
         }
       })
   }, [course.weekly, course.schedule, course.weekOverrides])
-
-  const load = useCallback(async () => {
-    try {
-      const { files: list } = await api.listFiles(course.id, stage)
-      setFiles(list)
-      setError('')
-      return list
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      return []
-    }
-  }, [course.id, stage])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const loadBooks = useCallback(async () => {
-    try {
-      const { books: list } = await api.listTextbooks(course.id)
-      setBooks(list)
-    } catch {
-      setBooks([])
-    }
-  }, [course.id])
-
-  useEffect(() => {
-    if (stage === '10_kb') void loadBooks()
-  }, [stage, loadBooks])
 
   // 默认选中第一个还没材料的课时，省得每次手动点
   useEffect(() => {
@@ -142,7 +124,7 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
           current.map((item, i) => (i === index ? { ...item, state: '已入库' } : item)),
         )
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
+          const message = errorMessage(err)
         setUploads((current) =>
           current.map((item, i) => (i === index ? { ...item, state: `失败：${message}` } : item)),
         )
@@ -163,13 +145,15 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
   const currentFiles = grouped.get(stage === '10_kb' ? UNFILED : selected) || []
 
   return (
-    <section>
-      <h2 className="section-title">材料</h2>
-      <p className="section-hint">
-        {stage === '10_kb'
+    <Panel
+      title="材料"
+      hint={
+        stage === '10_kb'
           ? '课程介绍、教学大纲、教材放在这里，用来提取课程档案。'
-          : '先选是哪一周的课，再放录音和课件。文件会落进这一周自己的目录，后面按周整理。'}
-      </p>
+          : '先选是哪一周的课，再放录音和课件。文件会落进这一周自己的目录，后面按周整理。'
+      }
+      error={error}
+    >
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
         {STAGE_OPTIONS.map((option) => (
@@ -179,11 +163,6 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
             className="btn"
             aria-pressed={option.key === stage}
             onClick={() => setStage(option.key)}
-            style={
-              option.key === stage
-                ? { borderColor: 'var(--signal)', background: 'var(--signal-soft)' }
-                : undefined
-            }
           >
             {option.label}
           </button>
@@ -292,12 +271,6 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
         </ul>
       )}
 
-      {error && (
-        <p className="notice notice--due" role="alert" style={{ marginTop: 14 }}>
-          {error}
-        </p>
-      )}
-
       {stage === '10_kb' && files.length > 0 && onExtract && (
         <p className="notice" style={{ marginTop: 14 }}>
           这些文件可以自动读出课程名、教师、学期和重要节点。
@@ -394,6 +367,6 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
           </tbody>
         </table>
       )}
-    </section>
+    </Panel>
   )
 }

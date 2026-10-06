@@ -1,0 +1,57 @@
+[
+  {
+    "key": "10_kb",
+    "label": "课程知识库",
+    "hint": "课程介绍、大纲、教材、文献"
+  },
+  {
+    "key": "00_source",
+    "label": "原始材料",
+    "hint": "每次课的录音与课件"
+  },
+  {
+    "key": "01_transcript",
+    "label": "转写稿",
+    "hint": "带时间戳的文本"
+  },
+  {
+    "key": "02_slides",
+    "label": "逐页文本与关键图",
+    "hint": "每页文本 + 关键页图片"
+  },
+  {
+    "key": "03_align",
+    "label": "页与讲述对齐",
+    "hint": "哪儿讲到了哪一页"
+  },
+  {
+    "key": "04_corrections",
+    "label": "纠错清单",
+    "hint": "逐条给依据与置信度"
+  },
+  {
+    "key": "05_supplements",
+    "label": "学科补充",
+    "hint": "带出处的延伸内容"
+  },
+  {
+    "key": "06_outline",
+    "label": "知识点大纲",
+    "hint": "编号大纲，出题的依据"
+  },
+  {
+    "key": "07_notes",
+    "label": "笔记与总结",
+    "hint": "图文笔记、讲课流程"
+  },
+  {
+    "key": "08_graph",
+    "label": "知识图谱",
+    "hint": "知识点之间的关系图"
+  },
+  {
+    "key": "09_quiz",
+    "label": "题库",
+    "hint": "题目、答案、解析"
+  }
+]

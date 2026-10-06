@@ -14,8 +14,13 @@ export interface StageState {
   label: string
   hint: string
   files: number
-  bytes: number
   status: string
+}
+
+/** /api/stages 返回的整理任务；key 是阶段目录名，或 full。 */
+export interface StageTask {
+  key: string
+  title: string
 }
 
 export interface Course {

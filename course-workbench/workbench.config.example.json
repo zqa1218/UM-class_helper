@@ -1,5 +1,6 @@
 {
   "courseRoot": "./courses",
+  "calendarRoot": "./calendars",
   "port": 8787,
   "codexCommand": "codex",
   "codexSandbox": "workspace-write",

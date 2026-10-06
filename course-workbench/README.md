@@ -28,6 +28,12 @@ npm run dev
 
 访问 http://localhost:5173
 
+改完代码想确认没跑偏，跑一次冒烟测试（用临时目录起真服务，建课、建阶段目录、上传归档、越界拦截都过一遍，不动 `courses/`）：
+
+```bash
+npm run smoke
+```
+
 ## 课程存在哪里
 
 课程目录默认在 `./courses/<课程名>/`，每个目录就是这门课的全部资产：
@@ -56,10 +62,13 @@ _jobs/               任务日志
 `workbench.config.json`：
 
 - `courseRoot` — 课程目录位置
+- `calendarRoot` — 校历数据位置，默认 `./calendars`
 - `port` — 服务端口，默认 8787
 - `codexCommand` — 调用的 Codex 命令，默认 `codex`
 - `codexSandbox` — 任务运行时的沙箱模式
 - `codexExtraArgs` — 追加给 `codex exec` 的参数
+
+环境变量 `PORT`、`COURSE_ROOT` 可以直接覆盖端口与课程目录，冒烟测试用的就是这两个。
 
 ### 关于沙箱
 

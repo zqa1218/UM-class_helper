@@ -36,7 +36,9 @@ description: "把课堂录音与课件加工成可长期复用的课程知识资
   09_quiz/           题库与每次出题稿
 ```
 
-用 `scripts/init_course.py` 建立，不要手工拼路径。
+用 `scripts/init_course.py` 建立，不要手工拼路径。目录清单以同目录的 `stages.json` 为准
+（课程工作台也读这一份），台账模板是 `assets/ledger-template.md`，课程资料标准是
+`references/syllabus-standard.md`——都只有一份，不要另抄。
 
 ## 阶段
 
@@ -59,7 +61,8 @@ description: "把课堂录音与课件加工成可长期复用的课程知识资
 ## 交互关口
 
 课程信息一律从学校的课程大纲与通知文件里提取，不靠手填。字段结构见
-[references/syllabus-standard.md](references/syllabus-standard.md)：只有课程名可以先用临时名字，
+[references/syllabus-standard.md](references/syllabus-standard.md)（工作台写进课程的
+`10_kb/课程资料标准.md` 就是这一份）：只有课程名可以先用临时名字，
 其余字段——课程代码、中英文名、开课单位、简介、先修要求、授课教师、学习成果、考核方式、
 课程内容、周次安排、教材与参考书——都由文件读出，用户确认后才写入课程。
 

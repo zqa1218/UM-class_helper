@@ -6,6 +6,8 @@ import type {
   Job,
   Outline,
   QuizItem,
+  StageState,
+  StageTask,
   TextbookEntry,
 } from './types'
 
@@ -35,6 +37,8 @@ export const api = {
     request<{ ok: boolean; courseRoot: string; codexSandbox: string; codexCommand: string }>(
       '/api/health',
     ),
+
+  stages: () => request<{ stages: StageState[]; tasks: StageTask[] }>('/api/stages'),
 
   listCourses: () => request<{ courses: Course[] }>('/api/courses'),
 

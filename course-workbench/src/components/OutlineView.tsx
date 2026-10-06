@@ -1,44 +1,35 @@
-import { useCallback, useEffect, useState } from 'react'
-
 import { api } from '../api'
+import { useLoader } from '../loader'
 import type { Outline, QuizItem } from '../types'
 import DocumentBrowser from './DocumentBrowser'
+import Panel from './Panel'
 
 interface Props {
   courseId: string
 }
 
+interface OutlineData {
+  outline: Outline | null
+  bank: QuizItem[]
+}
+
+/** 大纲与题库一起读；文件缺失不算错误，交给空态处理。 */
+async function loadOutlineData(courseId: string): Promise<OutlineData> {
+  const [outline, bank] = await Promise.all([
+    api.loadOutline(courseId).catch(() => null),
+    api.loadBank(courseId).catch(() => [] as QuizItem[]),
+  ])
+  return { outline, bank }
+}
+
 export default function OutlineView({ courseId }: Props) {
-  const [outline, setOutline] = useState<Outline | null>(null)
-  const [bank, setBank] = useState<QuizItem[]>([])
-  const [missing, setMissing] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const { data, loading, reload } = useLoader(() => loadOutlineData(courseId), [courseId])
+  const outline = data?.outline || null
+  const bank = data?.bank || []
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const parsed = await api.loadOutline(courseId)
-      setOutline(parsed)
-      setMissing(false)
-    } catch {
-      setOutline(null)
-      setMissing(true)
-    }
-    try {
-      setBank(await api.loadBank(courseId))
-    } catch {
-      setBank([])
-    }
-    setLoading(false)
-  }, [courseId])
+  if (loading) return <Panel title="知识点大纲" loading loadingText="正在读取大纲…" />
 
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  if (loading) return <p className="muted">正在读取大纲…</p>
-
-  if (missing || !outline?.units?.length) {
+  if (!outline?.units?.length) {
     return (
       <DocumentBrowser
         courseId={courseId}
@@ -71,18 +62,16 @@ export default function OutlineView({ courseId }: Props) {
   ).length
 
   return (
-    <section>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-        <h2 className="section-title">知识点大纲</h2>
-        <button className="btn" type="button" onClick={() => void load()}>
-          刷新
-        </button>
-      </div>
-      <p className="section-hint">
-        共 {totalPoints} 个知识点，其中 {coveredPoints} 个已经有题。出题范围就按这里的编号说，例如
-        「CN03 全部 + CN05-02」。
-      </p>
-
+    <Panel
+      title="知识点大纲"
+      hint={
+        <>
+          共 {totalPoints} 个知识点，其中 {coveredPoints} 个已经有题。出题范围就按这里的编号说，例如
+          「CN03 全部 + CN05-02」。
+        </>
+      }
+      onRefresh={() => void reload()}
+    >
       {outline.units.map((unit) => (
         <div className="outline-unit" key={unit.id}>
           <div className="outline-unit__head">
@@ -107,7 +96,7 @@ export default function OutlineView({ courseId }: Props) {
                       </div>
                     )}
                   </span>
-                  <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span className="inline-actions">
                     {point.level && (
                       <span className="level-tag" data-level={point.level}>
                         {point.level}
@@ -121,6 +110,6 @@ export default function OutlineView({ courseId }: Props) {
           ))}
         </div>
       ))}
-    </section>
+    </Panel>
   )
 }

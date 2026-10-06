@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 
 import { api } from './api'
+import { errorMessage } from './loader'
+import { KIND_LABEL, daysUntil } from './milestone'
 import CourseProfile from './components/CourseProfile'
 import DocumentBrowser from './components/DocumentBrowser'
 import ExtractPanel from './components/ExtractPanel'
-import GraphView from './components/GraphView'
 import Materials from './components/Materials'
 import NewCourse from './components/NewCourse'
 import OutlineView from './components/OutlineView'
@@ -13,6 +14,8 @@ import SchedulePanel from './components/SchedulePanel'
 import TasksView from './components/TasksView'
 import Timeline from './components/Timeline'
 import type { Course, Milestone } from './types'
+
+const GraphView = lazy(() => import('./components/GraphView'))
 
 type TabKey = 'overview' | 'materials' | 'outline' | 'records' | 'notes' | 'graph' | 'quiz' | 'tasks'
 
@@ -33,22 +36,6 @@ const RECORD_STAGES = [
   { key: '05_supplements', label: '学科补充' },
 ]
 
-const KIND_TEXT: Record<string, string> = {
-  lecture: '讲课',
-  deadline: '截止',
-  exam: '考试',
-  reading: '阅读',
-  other: '其他',
-}
-
-function daysUntil(date: string): number {
-  const target = Date.parse(`${date}T00:00:00`)
-  if (Number.isNaN(target)) return NaN
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return Math.round((target - today.getTime()) / 86400000)
-}
-
 export default function App() {
   const [courses, setCourses] = useState<Course[]>([])
   const [current, setCurrent] = useState<Course | null>(null)
@@ -58,12 +45,15 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
 
+  const currentIdRef = useRef(current?.id)
+  currentIdRef.current = current?.id
+
   const refresh = useCallback(
     async (keepId?: string) => {
       try {
         const { courses: list } = await api.listCourses()
         setCourses(list)
-        const target = keepId || current?.id
+        const target = keepId ?? currentIdRef.current
         const found = list.find((course) => course.id === target) || list[0] || null
         if (found) {
           const { course } = await api.getCourse(found.id)
@@ -73,19 +63,17 @@ export default function App() {
         }
         setError('')
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        setError(errorMessage(err))
       } finally {
         setReady(true)
       }
     },
-    [current?.id],
+    [],
   )
 
   useEffect(() => {
     void refresh()
-    // 只在首次挂载时拉取
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [refresh])
 
   const selectCourse = async (id: string) => {
     setCreating(false)
@@ -120,7 +108,7 @@ export default function App() {
       setTab('overview')
       await refresh(current.id)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
     }
   }
 
@@ -205,7 +193,7 @@ export default function App() {
 
         {next && (
           <div className="milestone-callout" data-kind={next.kind}>
-            <div className="spine__label">下一个节点 · {KIND_TEXT[next.kind]}</div>
+            <div className="spine__label">下一个节点 · {KIND_LABEL[next.kind]}</div>
             <div className="milestone-callout__date">
               {Number.isFinite(distance) ? (distance >= 0 ? `${distance} 天` : '已过') : '—'}
             </div>
@@ -359,11 +347,6 @@ export default function App() {
                         className="btn"
                         aria-pressed={recordStage === entry.key}
                         onClick={() => setRecordStage(entry.key)}
-                        style={
-                          recordStage === entry.key
-                            ? { borderColor: 'var(--signal)', background: 'var(--signal-soft)' }
-                            : undefined
-                        }
                       >
                         {entry.label}
                       </button>
@@ -392,7 +375,11 @@ export default function App() {
                 />
               )}
 
-              {tab === 'graph' && <GraphView courseId={current.id} />}
+              {tab === 'graph' && (
+                <Suspense fallback={<p className="muted">正在加载图谱…</p>}>
+                  <GraphView courseId={current.id} />
+                </Suspense>
+              )}
 
               {tab === 'quiz' && <QuizView courseId={current.id} />}
 

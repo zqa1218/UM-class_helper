@@ -1,12 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { api } from '../api'
-import type { Job } from '../types'
-
-interface TaskDef {
-  key: string
-  title: string
-}
+import { errorMessage, useLoader } from '../loader'
+import type { StageTask } from '../types'
+import Panel from './Panel'
 
 interface Props {
   courseId: string
@@ -23,38 +20,29 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 export default function TasksView({ courseId, onFinished }: Props) {
-  const [tasks, setTasks] = useState<TaskDef[]>([])
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [tasks, setTasks] = useState<StageTask[]>([])
   const [selected, setSelected] = useState('')
   const [log, setLog] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [error, setError] = useState('')
   const [sandbox, setSandbox] = useState('')
   const finishedRef = useRef<Set<string>>(new Set())
 
-  const loadJobs = useCallback(async () => {
-    try {
-      const { jobs: list } = await api.listJobs(courseId)
-      setJobs(list)
-      setError('')
-      return list
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      return []
-    }
-  }, [courseId])
+  const { data, error, reload: loadJobs, setError } = useLoader(
+    async () => (await api.listJobs(courseId)).jobs,
+    [courseId],
+  )
+  const jobs = data || []
 
   useEffect(() => {
-    api
+    void api
       .health()
       .then((health) => setSandbox(health.codexSandbox || ''))
       .catch(() => undefined)
-    fetch('/api/stages')
-      .then((response) => response.json())
-      .then((data: { tasks: TaskDef[] }) => setTasks(data.tasks))
+    void api
+      .stages()
+      .then((result) => setTasks(result.tasks))
       .catch(() => undefined)
-    void loadJobs()
-  }, [loadJobs])
+  }, [])
 
   useEffect(() => {
     const active = jobs.some((job) => job.status === 'running' || job.status === 'queued')
@@ -84,7 +72,7 @@ export default function TasksView({ courseId, onFinished }: Props) {
           onFinished()
         }
       } catch (err) {
-        if (alive) setLog(err instanceof Error ? err.message : String(err))
+        if (alive) setLog(errorMessage(err))
       }
     }
     void tick()
@@ -108,20 +96,18 @@ export default function TasksView({ courseId, onFinished }: Props) {
       setInstruction('')
       await loadJobs()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
     }
   }
 
   const current = jobs.find((job) => job.id === selected) || null
 
   return (
-    <section>
-      <h2 className="section-title">整理任务</h2>
-      <p className="section-hint">
-        每个任务会调起一次 Codex 会话，在课程目录里按流水线技能执行，产物直接落到对应目录。
-        一次只跑一个，排在后面的会等前面结束。
-      </p>
-
+    <Panel
+      title="整理任务"
+      hint="每个任务会调起一次 Codex 会话，在课程目录里按流水线技能执行，产物直接落到对应目录。一次只跑一个，排在后面的会等前面结束。"
+      error={error}
+    >
       {sandbox === 'danger-full-access' && (
         <p className="notice notice--due" style={{ marginBottom: 16 }}>
           当前沙箱模式是 danger-full-access：任务里的 Codex 可以读写本机任意文件，不再限制在课程目录内。
@@ -141,11 +127,6 @@ export default function TasksView({ courseId, onFinished }: Props) {
         />
       </div>
 
-      {error && (
-        <p className="notice notice--due" role="alert">
-          {error}
-        </p>
-      )}
 
       <div className="task-grid">
         {tasks.map((task) => (
@@ -191,7 +172,7 @@ export default function TasksView({ courseId, onFinished }: Props) {
                 <span className="milestone-row__title">{job.title}</span>
                 {job.error && <div className="milestone-row__note">{job.error}</div>}
               </span>
-              <span style={{ display: 'flex', gap: 6 }}>
+              <span className="inline-actions">
                 <button className="btn" type="button" onClick={() => setSelected(job.id)}>
                   看日志
                 </button>
@@ -219,6 +200,6 @@ export default function TasksView({ courseId, onFinished }: Props) {
           <pre className="job-log">{log || '日志还在写入…'}</pre>
         </>
       )}
-    </section>
+    </Panel>
   )
 }

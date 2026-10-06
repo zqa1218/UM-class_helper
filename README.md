@@ -64,6 +64,12 @@ npm start
 npm run dev     # 打开 http://localhost:5173
 ```
 
+改完代码想确认没跑偏，跑一次冒烟测试（临时目录起真服务，建课、上传、越界拦截走一遍）：
+
+```bash
+npm run smoke
+```
+
 ### 装上流水线技能
 
 工作台只负责界面和归档，真正的整理逻辑在一个 Codex 技能里。把仓库里的技能装到
@@ -105,6 +111,7 @@ cp workbench.config.example.json workbench.config.json
 | 字段 | 说明 |
 |---|---|
 | `courseRoot` | 课程数据存放位置，默认 `./courses` |
+| `calendarRoot` | 校历数据存放位置，默认 `./calendars` |
 | `port` | 服务端口，默认 8787 |
 | `codexCommand` | 调用的 Codex 命令 |
 | `codexSandbox` | 任务运行时的沙箱模式 |
@@ -118,12 +125,14 @@ cp workbench.config.example.json workbench.config.json
 course-workbench/
   server/            本地服务：课程、任务、校历、教材
   src/               前端
-  scripts/           校历刷新脚本
+  scripts/           冒烟测试与校历刷新脚本
   skills/            配套的 Codex 技能
   calendars.json     校历订阅地址
   calendars/         拉取到的校历数据
   courses/           课程数据（不进仓库）
 ```
+
+CI 在 `.github/workflows/ci.yml`：`npm ci` → `npm run build` → `npm run smoke`。
 
 每门课的目录：
 

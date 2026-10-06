@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '../api'
+import { errorMessage, useLoader } from '../loader'
+import { addDays, isoDate, parseDate } from '../milestone'
 import type {
-  CalendarInfo,
   CalendarTerm,
   Course,
   MeetingSlot,
@@ -20,25 +21,10 @@ const KINDS: { value: OverrideKind; label: string }[] = [
   { value: 'other', label: '其他' },
 ]
 
-function toDate(value: string): Date {
-  return new Date(`${value}T00:00:00`)
-}
-
-function iso(date: Date): string {
-  const copy = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-  return copy.toISOString().slice(0, 10)
-}
-
-function addDays(date: Date, days: number): Date {
-  const copy = new Date(date.getTime())
-  copy.setDate(copy.getDate() + days)
-  return copy
-}
-
 /** 学期第 1 教学周的周一。校历给的是开学第一天，不一定是周一。 */
 function firstMonday(teachingStart: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(teachingStart)) return null
-  const start = toDate(teachingStart)
+  const start = parseDate(teachingStart)
   const offset = (start.getDay() + 6) % 7
   return addDays(start, -offset)
 }
@@ -57,7 +43,6 @@ interface Props {
 }
 
 export default function SchedulePanel({ course, onSaved }: Props) {
-  const [calendars, setCalendars] = useState<CalendarInfo[]>([])
   const [slot, setSlot] = useState<MeetingSlot>(
     course.meetingSlot || { weekday: 1, start: '', end: '', location: '' },
   )
@@ -67,19 +52,15 @@ export default function SchedulePanel({ course, onSaved }: Props) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
 
-  const load = useCallback(async () => {
-    try {
-      const { calendars: list } = await api.listCalendars()
-      setCalendars(list)
-      setCalendarId((current) => current || list[0]?.id || '')
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err))
-    }
-  }, [])
+  const { data: calendarData, error, reload: load } = useLoader(
+    async () => (await api.listCalendars()).calendars,
+    [],
+  )
+  const calendars = useMemo(() => calendarData || [], [calendarData])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (calendarData?.length) setCalendarId((current) => current || calendarData[0].id)
+  }, [calendarData])
 
   const calendar = calendars.find((item) => item.id === calendarId) || calendars[0] || null
   const term: CalendarTerm | null =
@@ -97,7 +78,7 @@ export default function SchedulePanel({ course, onSaved }: Props) {
           }))
         : []
     return source.map((item) => {
-      const date = iso(addDays(monday, (item.week - 1) * 7 + (slot.weekday - 1)))
+      const date = isoDate(addDays(monday, (item.week - 1) * 7 + (slot.weekday - 1)))
       const holiday = term.holidays.find((entry) => entry.date === date)?.name || ''
       return {
         week: item.week,
@@ -142,7 +123,7 @@ export default function SchedulePanel({ course, onSaved }: Props) {
       onSaved(updated)
       setMessage('排课已保存')
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err))
+      setMessage(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -188,7 +169,7 @@ export default function SchedulePanel({ course, onSaved }: Props) {
       onSaved(updated)
       setMessage(`已写入 ${nodes.length} 条周次节点，保留原有 ${kept.length} 条其他节点`)
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err))
+      setMessage(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -196,7 +177,7 @@ export default function SchedulePanel({ course, onSaved }: Props) {
 
   return (
     <section>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+      <div className="panel-head">
         <h2 className="section-title">排课</h2>
         <button
           className="btn"
@@ -219,6 +200,12 @@ export default function SchedulePanel({ course, onSaved }: Props) {
           ? ''
           : '　先把大纲里的周次确认写入，这里才能按周排日期。'}
       </p>
+
+      {error && (
+        <p className="notice notice--due" role="alert">
+          {error}
+        </p>
+      )}
 
       <div className="field-row" style={{ maxWidth: 860 }}>
         <div className="field">
@@ -305,7 +292,7 @@ export default function SchedulePanel({ course, onSaved }: Props) {
                   <td>{row.topic}</td>
                   <td>
                     {row.holiday ? (
-                      <span className="level-tag" style={{ borderColor: '#e0b3bc', color: 'var(--due)' }}>
+                      <span className="level-tag level-tag--due">
                         {row.holiday}
                       </span>
                     ) : (
