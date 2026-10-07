@@ -28,7 +28,8 @@ npm run dev
 
 访问 http://localhost:5173
 
-改完代码想确认没跑偏，跑一次冒烟测试（用临时目录起真服务，建课、建阶段目录、上传归档、越界拦截都过一遍，不动 `courses/`）：
+改完代码想确认没跑偏，跑一次冒烟测试（用临时目录起真服务，建课、建阶段目录、上传归档、越界拦截、产物检查、
+以及「自己调 API」的整条工具循环——接口是本地假接口，不联网，全程不动 `courses/`）：
 
 ```bash
 npm run smoke
@@ -64,25 +65,54 @@ _jobs/               任务日志
 - `courseRoot` — 课程目录位置
 - `calendarRoot` — 校历数据位置，默认 `./calendars`
 - `port` — 服务端口，默认 8787
-- `codexCommand` — 调用的 Codex 命令，默认 `codex`
-- `codexSandbox` — 任务运行时的沙箱模式
-- `codexExtraArgs` — 追加给 `codex exec` 的参数
+- `runner` — 任务怎么跑：`api`（默认，工作台自己调接口）或 `codex`（外接 codex CLI）
+- `api.baseUrl` — OpenAI 兼容接口的地址，例如 `https://api.deepseek.com/v1`
+- `api.model` — 模型名，例如 `deepseek-chat`
+- `api.apiKeyEnv` — 从哪个环境变量读 key，默认 `WORKBENCH_API_KEY`
+- `api.apiKey` — 也可以把 key 直接写在这里（不推荐，别提交进仓库）
+- `api.allowCommands` — 是否允许模型在课程目录里跑命令（转写音频、解析课件要用），默认 true
+- `api.maxRounds` / `api.maxCommandMs` — 工具循环最多几轮、单条命令最多跑多久
+- `api.vision` — 是否让模型看图（认题目截图），默认 true
+- `api.visionBaseUrl` / `api.visionModel` — 识图单独走哪个接口和模型，不填就跟 `baseUrl` / `model`
+- `api.visionApiKeyEnv` / `api.visionApiKey` — 识图用的 key，不填就用主接口那把
+- `codexCommand` / `codexSandbox` / `codexExtraArgs` — 只有 `runner` 是 `codex` 时才用
 
 环境变量 `PORT`、`COURSE_ROOT` 可以直接覆盖端口与课程目录，冒烟测试用的就是这两个。
+`WORKBENCH_API_BASE_URL`、`WORKBENCH_API_MODEL`、`WORKBENCH_API_KEY` 临时覆盖 api 段，方便换模型试跑。
 
-### 关于沙箱
+### 两条执行路径
 
-默认值是 `danger-full-access`，因为本机的沙箱助手在 `%USERPROFILE%\.codex\.sandbox-bin`
-上无法设置 ACL，`workspace-write` 会直接失败。这个模式下任务里的 Codex
-可以读写本机任意文件，界面的「任务」页也会提示这一点。
+**默认：工作台自己调 API。** 任务直接打 `{baseUrl}/chat/completions`，工具循环（列目录、读文件、写文件、跑命令）
+在 `server/agent.mjs` 里。读、写、列目录都卡在课程目录内，越界直接拒绝；`run_command` 是留给
+转写音频、解析课件这类活的，跑得出目录，介意就把 `api.allowCommands` 关掉——关掉后模型只能用读写工具，
+要解析的文件得自己先转成文本。这条路不依赖本机的 codex 安装，也不吃 Windows 沙箱那一套。
+「任务」页顶上的提示会说明当前走哪条路、用哪个模型、key 有没有读到。
 
-想收紧成只写课程目录，先用管理员权限执行：
+**可选：外接 codex CLI。** 把 `runner` 改成 `codex` 就回到以前的做法：`codex exec` 每阶段一个会话，
+用 `$lecture-knowledge-pipeline` 技能，`codexSandbox`、`codexExtraArgs` 这时才生效。
+
+### 关于沙箱（只有 runner 是 codex 才相关）
+
+`codexSandbox` 默认是 `workspace-write`，也就是任务里的 Codex 只能写课程目录，读别的目录会被挡。
+
+Windows 上有个坑：如果沙箱助手在 `%USERPROFILE%\.codex\.sandbox-bin` 上设不了 ACL，
+`workspace-write` 会直接失败——任务日志里能看到 `apply deny-read ACLs`，任务跑完不会留下任何产物，
+而且路径越深越容易踩到。这时把 `codexSandbox` 改成 `danger-full-access` 再重启服务：
+这个模式下任务里的 Codex 可以读写本机任意文件，界面的「任务」页也会提示这一点。
+
+想一直留在 `workspace-write`，先用管理员权限执行：
 
 ```
 icacls "%USERPROFILE%\.codex\.sandbox-bin" /setowner "%USERNAME%"
 ```
 
-再把 `codexSandbox` 改回 `workspace-write`，重启服务。
+再重启服务。
+
+### 任务跑完怎么算成功
+
+每个阶段都声明了自己该产出的文件（比如「从文件提取课程信息」对应 `10_kb/extracted.json`）。
+退出码是 0、却连一个产物都没有的阶段会被标成失败，并写明缺了什么——
+不会拿「已完成」把跑空的任务糊过去。
 
 ## 出题范围怎么写
 
@@ -93,6 +123,46 @@ icacls "%USERPROFILE%\.codex\.sandbox-bin" /setowner "%USERNAME%"
 - `第 4 章题量不够，补 15 道`
 
 题目、答案、解析、知识点编号会一起进 `bank.json`，练习页按范围筛选、按错题重练。
+
+## 图片题目怎么整理
+
+拍照或截图的题目（练习册、往年卷、老师发的图）不用手打：
+
+1. 「题库」页展开「图片题目」，把截图拖进去，落到 `09_quiz/images/`。
+2. 点「从图片整理题目集」，跑一次「从图片整理题目集」任务（任务页里也有这一个）。
+3. 模型先逐张图用 `read_image` 认字（抄的是图上的原文，不改写不翻译），再整理进题库：
+   - 图里已经印了答案的，照抄进 `answer`，并在 `sources` 里注明「图片已给答案」；
+   - 图里没答案的，先到 `06_outline/`、`07_notes/`、`10_kb/` 里找依据；找不到依据就自己解，
+     解析开头写成「待老师确认：」，方便你回头核；
+   - 重复的题不入库，只补答案和解析。
+4. 产物两份：`09_quiz/bank.json`（机器可练，练习页按范围筛选、按错题重练）
+   和 `09_quiz/图片题目集.md`（人读版，一题一块带出处图片名）。
+
+练题时题干下面会挂原图缩略图，点开就是原图，能对着截图核题。
+已经整理过的图再跑一遍不会有新题，任务照常算完成，但会在运行记录里留一句「题库条数没有变化」。
+截图传错了，展开「图片题目」就能删：每张图下面有「删图」和「图+题」两个按钮——
+「删图」只删图片文件，题库里由它整理的题留着；「图+题」把图和在它上面整理的题一起删掉，删之前会再问一次。
+
+识图用的是同一个接口：`api.visionModel` 不填就跟着 `api.model` 走（`deepseek-flash` 这类支持图片输入的模型直接可用）。
+想换个便宜或更准的识图模型，在配置里单独写 `api.visionBaseUrl`、`api.visionModel`、`api.visionApiKeyEnv`。
+模型不吃图片、key 没配的，任务会在日志里明说，不会拿空题库糊过去。
+
+## 图片知识点怎么整理
+
+课堂笔记、板书、教材页的照片也能直接变成知识点和笔记：
+
+1. 「大纲」页展开「图片知识点」，把照片拖进去，落到 `06_outline/images/`。
+2. 点「从图片整理知识点」，跑一次「从图片整理知识点与笔记」任务（任务页里也有这一个）。
+3. 模型先逐张图用 `read_image` 认字（抄的是图上的原文，不改写不翻译），再只用图里的内容提炼：
+   - 图里没有的定义、数据、结论一律不补，拿不准的标「[看不清]」或「待老师确认」；
+   - 它自己的解读不掺进知识点，单独写进笔记并标「我的理解」。
+4. 产物三份：`06_outline/outline.json` 的「图片笔记整理」单元（知识点，带稳定 ID 和原图路径）、
+   `06_outline/图片知识点.md`（人读版）和 `07_notes/图片笔记.md`（按图分段的笔记）。
+
+大纲里这些知识点下面会挂原图缩略图，点开就能对着照片核。同一张图再跑一遍不会重复建知识点，
+只把原图重新挂回去，运行记录里会留一句「知识点条数没有变化」。
+传错了就点图下面的「删图」——只删照片，知识点和笔记留着（重传同一张图再跑一次，原图会重新挂上）；
+「图+知识点」把照片、这张图整理的知识点、以及两份 md 里对应的小节一起删掉，删之前会再问一次。
 
 ## 课程信息怎么来
 

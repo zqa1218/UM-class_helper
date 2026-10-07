@@ -394,6 +394,11 @@ a {
   cursor: not-allowed;
 }
 
+.btn--tiny {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -919,6 +924,81 @@ a {
   padding: 10px 14px;
   border-radius: 0 var(--r-sm) var(--r-sm) 0;
   font-size: 13px;
+}
+
+/* ── 图片认字（题目截图 / 笔记照片）─────────── */
+
+.image-intake {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--card);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.image-intake > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink-800);
+}
+
+.image-intake[open] > summary {
+  margin-bottom: 12px;
+}
+
+.thumb-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.thumb {
+  display: block;
+  width: 132px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  text-decoration: none;
+}
+
+.thumb:hover {
+  border-color: var(--signal);
+}
+
+.thumb img {
+  display: block;
+  width: 100%;
+  border-radius: 2px;
+}
+
+.thumb__name {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--ink-500);
+  word-break: break-all;
+}
+
+.thumb__actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.thumb--mini {
+  width: 56px;
+  padding: 2px;
+}
+
+.upload-list {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--ink-500);
 }
 
 /* ── 任务 ───────────────────────────────────── */

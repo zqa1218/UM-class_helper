@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 interface Props {
   title: string
   hint?: ReactNode
+  /** 固定在正文上方的一块内容（加载中和空态时也显示） */
+  extra?: ReactNode
   /** 刷新按钮右侧的额外按钮 */
   actions?: ReactNode
   onRefresh?: () => void
@@ -18,6 +20,7 @@ interface Props {
 export default function Panel({
   title,
   hint,
+  extra,
   actions,
   onRefresh,
   error,
@@ -38,6 +41,7 @@ export default function Panel({
         {actions}
       </div>
       {hint && <p className="section-hint">{hint}</p>}
+      {extra}
       {error && (
         <p className="notice notice--due" role="alert">
           {error}

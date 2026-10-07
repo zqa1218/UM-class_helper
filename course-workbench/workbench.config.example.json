@@ -2,6 +2,15 @@
   "courseRoot": "./courses",
   "calendarRoot": "./calendars",
   "port": 8787,
+  "runner": "api",
+  "api": {
+    "baseUrl": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "allowCommands": true,
+    "maxRounds": 40,
+    "maxCommandMs": 300000
+  },
   "codexCommand": "codex",
   "codexSandbox": "workspace-write",
   "codexExtraArgs": []

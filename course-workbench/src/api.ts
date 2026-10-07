@@ -34,9 +34,17 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () =>
-    request<{ ok: boolean; courseRoot: string; codexSandbox: string; codexCommand: string }>(
-      '/api/health',
-    ),
+    request<{
+      ok: boolean
+      courseRoot: string
+      runner: 'api' | 'codex'
+      model: string
+      baseUrl: string
+      hasApiKey: boolean
+      allowCommands: boolean
+      codexSandbox: string
+      codexCommand: string
+    }>('/api/health'),
 
   stages: () => request<{ stages: StageState[]; tasks: StageTask[] }>('/api/stages'),
 
@@ -73,6 +81,20 @@ export const api = {
 
   rawUrl: (id: string, relPath: string) =>
     `/api/courses/${encodeURIComponent(id)}/raw?path=${encodeURIComponent(relPath)}`,
+
+  deleteFile: (id: string, relPath: string, questions: 'keep' | 'drop' = 'keep') =>
+    request<{
+      ok: boolean
+      /** drop 时删掉/keep 时保留的题目数 */
+      dropped: number
+      kept: number
+      pointsRemoved: number
+      pointsUntagged: number
+      notesRemoved: number
+    }>(
+      `/api/courses/${encodeURIComponent(id)}/file?path=${encodeURIComponent(relPath)}&questions=${questions}`,
+      { method: 'DELETE' },
+    ),
 
   upload: async (id: string, stage: string, file: File, rel = '') => {
     const query = new URLSearchParams({ stage, name: file.name, rel })

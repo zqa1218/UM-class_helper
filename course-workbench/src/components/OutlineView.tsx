@@ -2,6 +2,7 @@ import { api } from '../api'
 import { useLoader } from '../loader'
 import type { Outline, QuizItem } from '../types'
 import DocumentBrowser from './DocumentBrowser'
+import OutlineImages from './OutlineImages'
 import Panel from './Panel'
 
 interface Props {
@@ -29,6 +30,9 @@ export default function OutlineView({ courseId }: Props) {
 
   if (loading) return <Panel title="知识点大纲" loading loadingText="正在读取大纲…" />
 
+  // 笔记照片的上传口在两种状态下都要有：还没有大纲时，正是靠它先出一批知识点
+  const intake = <OutlineImages courseId={courseId} onOutlineChanged={() => void reload()} />
+
   if (!outline?.units?.length) {
     return (
       <DocumentBrowser
@@ -36,8 +40,9 @@ export default function OutlineView({ courseId }: Props) {
         stage="06_outline"
         title="知识点大纲"
         hint="还没有结构化大纲时，这里显示该目录下的原始文件。"
-        emptyHint="还没有大纲。先跑「生成知识点大纲」任务，或先导入材料并完成转写、解析与纠错。"
-        prefer={['outline.md', 'outline.json']}
+        emptyHint="还没有大纲。把笔记照片丢进上面的「图片知识点」，或者先导入材料并跑「生成知识点大纲」任务。"
+        prefer={['outline.md', 'outline.json', '图片知识点.md']}
+        extra={intake}
       />
     )
   }
@@ -71,6 +76,7 @@ export default function OutlineView({ courseId }: Props) {
         </>
       }
       onRefresh={() => void reload()}
+      extra={intake}
     >
       {outline.units.map((unit) => (
         <div className="outline-unit" key={unit.id}>
@@ -93,6 +99,22 @@ export default function OutlineView({ courseId }: Props) {
                       <div className="outline-point__def mono">
                         来源：{point.sources?.join('；')}
                         {point.hasSupplement ? '　＋补充' : ''}
+                      </div>
+                    )}
+                    {(point.images || []).length > 0 && (
+                      <div className="thumb-grid">
+                        {(point.images || []).map((image) => (
+                          <a
+                            className="thumb thumb--mini"
+                            key={image}
+                            href={api.rawUrl(courseId, image)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="打开原图"
+                          >
+                            <img src={api.rawUrl(courseId, image)} alt="" loading="lazy" />
+                          </a>
+                        ))}
                       </div>
                     )}
                   </span>

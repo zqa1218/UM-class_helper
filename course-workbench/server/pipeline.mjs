@@ -4,20 +4,23 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { coursePaths, readJson, writeJson } from './courses.mjs'
+import { coursePaths, pathExists, readJson, writeJson } from './courses.mjs'
+import { apiConfig, runAgent } from './agent.mjs'
 
 const SKILL = '$lecture-knowledge-pipeline'
 
 const SHARED_RULES = [
-  '按技能中的铁律执行：不静默改写转写稿；低置信项标「待老师确认」；',
+  '按下面的铁律执行：不静默改写转写稿；低置信项标「待老师确认」；',
   '每个知识点给稳定 ID 与来源（PPT 页码 / 录音时间戳）；',
   '补充内容必须带出处并与课堂原话分开；',
-  '产物写进对应编号目录，不要另建目录树。',
+  '产物写进对应编号目录，不要另建目录树；',
+  '10_kb/课程资料标准.md 是工作台的字段说明模板，不是课程材料，不能当依据，里面的示例值不要照抄。',
 ].join('')
 
 const STAGE_TASKS = {
   extract_course: {
     title: '从文件提取课程信息',
+    expects: ['10_kb/extracted.json'],
     body: [
       '读取 10_kb/ 里的学校通知、课程大纲、课程介绍等文件，按 10_kb/课程资料标准.md 的结构把课程信息抽出来。',
       '- 只写一个文件：10_kb/extracted.json。不要改动 course.json，也不要改动或移动原文件。',
@@ -38,7 +41,7 @@ const STAGE_TASKS = {
       '  "prerequisites": "先修要求，没有就留空",',
       '  "startDate": "学期第一天，YYYY-MM-DD，读不出留空",',
       '  "endDate": "学期最后一天，YYYY-MM-DD，读不出留空",',
-      '  "almanacUrl": "校历链接，有就填",',
+      '  "almanacUrl": "校历链接，课程文件里写明了才填，否则留空",',
       '  "keywords": ["关键词"],',
       '  "instructors": [',
       '    {"name": "姓名", "email": "邮箱", "phone": "电话", "office": "办公室", "officeHours": "答疑时间"}',
@@ -67,6 +70,7 @@ const STAGE_TASKS = {
   },
   '10_kb': {
     title: '整理课程知识库',
+    expects: ['10_kb/syllabus.md'],
     body: [
       '读取 10_kb/ 里的课程介绍、教学大纲、教材与文献，抽出一份课程底色：',
       '- 写 10_kb/syllabus.md：课程定位、先修要求、每周主题安排、考核方式、教材与参考书。',
@@ -77,6 +81,7 @@ const STAGE_TASKS = {
   },
   textbooks: {
     title: '教材索引',
+    expects: ['10_kb/textbooks/index.md'],
     body: [
       '给 10_kb/textbooks/ 下的教材建索引。一本书一个目录，里面有 book.json，可能有 book.pdf。',
       '- 先读 book.json，把 title、publisher、isbn、access 补全。补不出来的留空，不要编。',
@@ -95,6 +100,7 @@ const STAGE_TASKS = {
   },
   '00_source': {
     title: '盘点新导入的材料',
+    expects: ['00_source/manifest.md'],
     body: [
       '扫描 00_source/ 里新加入的录音与课件，按周次建立清单：',
       '- 这门课按周次组织，材料也按周次归档。给每一周建一个目录：week-01、week-02……',
@@ -107,6 +113,7 @@ const STAGE_TASKS = {
   },
   '01_transcript': {
     title: '转写录音',
+    expects: ['01_transcript/'],
     body: [
       '把 00_source/ 里还没有转写稿的音频转成文本：',
       '- 使用 transcribe 技能；需要区分老师和学生提问时启用说话人分离。',
@@ -117,6 +124,7 @@ const STAGE_TASKS = {
   },
   '02_slides': {
     title: '解析课件',
+    expects: ['02_slides/slides.md'],
     body: [
       '把 00_source/ 里的课件解析到 02_slides/：',
       '- 逐页提文本，一页一个 page-NN.txt，并写合并稿 slides.md，页间用 <!-- page NN --> 分隔。',
@@ -127,6 +135,7 @@ const STAGE_TASKS = {
   },
   '03_align': {
     title: '对齐讲述与课件',
+    expects: ['03_align/align.md'],
     body: [
       '把转写稿切到对应的课件页：',
       '- 有真实翻页时间点就直接用；没有就按证据推断（念标题、说「下一页」「这张图」、主题突变）。',
@@ -136,6 +145,7 @@ const STAGE_TASKS = {
   },
   '04_corrections': {
     title: '校对与纠错',
+    expects: ['04_corrections/corrections.md'],
     body: [
       '逐条列出转写稿里可疑的地方，写 04_corrections/corrections.md：',
       '- 分类：A 转写误识别、B 数字与单位、C 口误或前后矛盾、D 课件与讲述冲突。',
@@ -146,6 +156,7 @@ const STAGE_TASKS = {
   },
   '05_supplements': {
     title: '学科补充',
+    expects: ['05_supplements/supplements.md'],
     body: [
       '补三类内容，写 05_supplements/supplements.md：',
       '- 课件一带而过但属于考纲范围的；',
@@ -157,6 +168,7 @@ const STAGE_TASKS = {
   },
   '06_outline': {
     title: '生成知识点大纲',
+    expects: ['06_outline/outline.md', '06_outline/outline.json'],
     body: [
       '生成三级知识点结构：',
       '- 写 06_outline/outline.md 供人读，写 06_outline/outline.json 供出题使用。',
@@ -167,6 +179,7 @@ const STAGE_TASKS = {
   },
   '07_notes': {
     title: '写笔记、讲课流程与总结',
+    expects: ['07_notes/notes.md', '07_notes/lecture-flow.md', '07_notes/summary.md'],
     body: [
       '产出三份人读的成果：',
       '- 07_notes/notes.md：图文并茂，关键图用相对路径内嵌（../02_slides/page-NN.png），每节挂知识点 ID。',
@@ -176,6 +189,7 @@ const STAGE_TASKS = {
   },
   '08_graph': {
     title: '生成知识图谱',
+    expects: ['08_graph/knowledge-map.md'],
     body: [
       '用 Mermaid 画知识图谱，写 08_graph/knowledge-map.md：',
       '- 节点用知识点 ID 与名称；边标明关系类型：包含、前置、对比、因果、并列。',
@@ -184,6 +198,7 @@ const STAGE_TASKS = {
   },
   '09_quiz': {
     title: '出题',
+    expects: ['09_quiz/'],
     body: [
       '按用户给定的范围与数量出题：',
       '- 题型以选择题为主，每题带答案、解析、知识点 ID、来源。',
@@ -192,15 +207,162 @@ const STAGE_TASKS = {
       '- 出完把新题追加进 bank.json。',
     ].join('\n'),
   },
+  quiz_from_images: {
+    title: '从图片整理题目集',
+    expects: ['09_quiz/bank.json'],
+    grows: { path: '09_quiz/bank.json', label: '题库条数', reason: '要么图片里没有新题，要么模型没入库' },
+    body: [
+      '把 09_quiz/images/ 里的题目图片整理成题库和人读的题目集。',
+      '- 先 list_files 09_quiz/images/：一张图都没有就停下，一句话说明「没有图片」，不写任何文件。',
+      '- 每张图用 read_image 认字。它返回的只是原样抄写，不是答案；字认不准的地方标「[看不清]」，不要补全。',
+      '- 一题一条入库，字段就按下面这个结构写（bank.json 里 items 的写法）：',
+      '  {',
+      '    "id": "IMG-001",',
+      '    "type": "single",            // single 单选 / multi 多选 / truefalse 判断 / short 简答',
+      '    "stem": "题干原文",',
+      '    "options": {"A": "选项原文", "B": "选项原文"},',
+      '    "answer": ["A"],             // 多选给多个字母；判断题写 ["对"] 或 ["错"]',
+      '    "explanation": "解析：为什么选它，其他选项错在哪",',
+      '    "pointIds": ["CN03-02"],     // 到 06_outline/outline.json 里对，对不上留空数组',
+      '    "difficulty": "基础",         // 基础 / 中等 / 提高',
+      '    "sources": ["题目图片 q1.png 第 1 题"],',
+      '    "images": ["09_quiz/images/q1.png"],',
+      '    "isExtension": false',
+      '  }',
+      '- 图里已经给了答案的照抄进 answer，sources 里注明「图片已给答案」。',
+      '- 图里没给答案的，先到 06_outline/、07_notes/、10_kb/ 里找依据再作答；',
+      '  课程材料里找不到依据的，自己解完把 explanation 开头写成「待老师确认：」，别再猜第二个答案。',
+      '- 题干和选项保持图片原文，不改写、不翻译、不合并；一张图里有几道题就出几条。',
+      '- 先读 09_quiz/bank.json：题干相同或考同一处的题不要重复入库，已存在的题只补 answer、explanation、images。',
+      '- id 用 IMG-001、IMG-002……按图片顺序排，避开已有 ID；判断题、简答题不要 options。',
+      '- 图片文件本身不要改、不要移动、不要删。',
+      '- 再写一份人读的 09_quiz/图片题目集.md：一题一块，写题号、题干、选项、答案、解析、出处图片文件名。',
+      '- 收尾说明：整理了几题、几题答案是从图里读到的、几题是自己解的需要人工核。',
+    ].join('\n'),
+  },
+  points_from_images: {
+    title: '从图片整理知识点与笔记',
+    expects: ['06_outline/图片知识点.md', '07_notes/图片笔记.md'],
+    grows: { path: '06_outline/outline.json', label: '知识点条数', reason: '要么图片里没有新知识点，要么模型没入库' },
+    body: [
+      '把 06_outline/images/ 里的笔记照片（课堂笔记、板书、教材页、手写整理）整理成知识点和笔记。',
+      '- 先 list_files 06_outline/images/，空了再 list_files 06_outline/ 看有没有散在根目录的图片；',
+      '  一张图都没有就停下，一句话说明「没有图片」，不写任何文件。',
+      '- 每张图用 read_image 认字。它返回的只是原样抄写，不是知识点；字认不准的地方标「[看不清]」，不要补全。',
+      '- 只整理图里真实存在的内容：图里没有的定义、数据、结论一律不许补。你自己的解读要么不写，',
+      '  要么写进 07_notes/图片笔记.md 并标注「我的理解」；拿不准的标「待老师确认」。',
+      '- 知识点写进 06_outline/outline.json（没有这个文件就先建一个），结构：',
+      '  {',
+      '    "course": "课程名",',
+      '    "units": [',
+      '      {',
+      '        "id": "IMG",',
+      '        "title": "图片笔记整理",',
+      '        "sections": [',
+      '          {',
+      '            "id": "IMG-01",',
+      '            "title": "这张图的主题（用图里的标题，没有就用首句概括）",',
+      '            "points": [',
+      '              {',
+      '                "id": "IMG-01-01",          // 稳定 ID，避开已有的 ID，重跑不许换号',
+      '                "title": "知识点名称",',
+      '                "definition": "图里对它的定义或说明，原话优先",',
+      '                "keywords": ["关键词"],',
+      '                "level": "基础",            // 基础 / 中等 / 提高',
+      '                "sources": ["图片 06_outline/images/note1.png"],',
+      '                "images": ["06_outline/images/note1.png"],',
+      '                "hasSupplement": false',
+      '              }',
+      '            ]',
+      '          }',
+      '        ]',
+      '      }',
+      '    ]',
+      '  }',
+      '- 一张图一个 section，图里的每个知识点一条 point；每条都要带 images 和 sources（写清是哪张图）。',
+      '- 先读已有的 06_outline/outline.json：同样的知识点只补 definition、keywords、images，不要重复成两条；',
+      '  别的 unit（课程本身的大纲）不要动，只在 id 为 IMG 的 unit 里增删。',
+      '- 再写两份人读的产物，两份都按图分节，小节标题就用图片文件名（例如「## note1.png」），方便删图时整段摘掉：',
+      '  06_outline/图片知识点.md：一张图一块，写图片文件名、主题、知识点列表（带 ID）；',
+      '  07_notes/图片笔记.md：一张图一块，按图里的小标题分段，把定义、例子、公式、易错点写成能直接读的笔记，并给每个知识点挂 ID。',
+      '- 图片文件本身不要改、不要移动、不要删；不要动 09_quiz/。',
+      '- 收尾说明：整理了几张图、几个知识点、哪些地方标了「[看不清]」或「待老师确认」。',
+    ].join('\n'),
+  },
 }
 
 const FULL_PIPELINE = 'full'
 
-function buildPrompt(course, stageKey, instruction) {
+/**
+ * 阶段的产物清单见 STAGE_TASKS[].expects，路径以 / 结尾表示「目录里至少有一个文件」。
+ * 退出码是 0 但一个产物都没有，不是「没啥可做」，而是环境坏了（例如 Windows 沙箱
+ * 在深层路径上 apply deny-read ACLs 失败）或模型压根没动手，得让它在界面上显形。
+ */
+async function dirHasFile(dir) {
+  let entries = []
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.isFile()) return true
+    if (entry.isDirectory() && (await dirHasFile(path.join(dir, entry.name)))) return true
+  }
+  return false
+}
+
+/** 返回该阶段缺的产物；空数组表示产物齐了。 */
+export async function missingArtifacts(courseDir, stageKey) {
+  const expects = STAGE_TASKS[stageKey]?.expects
+  if (!expects) return []
+  const missing = []
+  for (const expect of expects) {
+    const ok = expect.endsWith('/')
+      ? await dirHasFile(path.resolve(courseDir, expect))
+      : await pathExists(path.resolve(courseDir, expect))
+    if (!ok) missing.push(expect)
+  }
+  return missing
+}
+
+/** bank.json 这类「应该越用越多」的产物，跑完数一下条数，没涨就提示一声。 */
+async function countItems(file) {
+  const data = await readJson(file)
+  return countEntries(data)
+}
+
+/** 数一份产物里的条目：数组、{items:[]}、大纲的 units→sections→points 都认。 */
+function countEntries(data) {
+  if (Array.isArray(data)) return data.length
+  if (Array.isArray(data?.items)) return data.items.length
+  if (Array.isArray(data?.units)) {
+    return data.units.reduce(
+      (sum, unit) =>
+        sum +
+        (unit?.sections || []).reduce((count, section) => count + (section?.points || []).length, 0),
+      0,
+    )
+  }
+  return 0
+}
+
+/** 跑任务用哪条路：默认自己调 API，只有显式写 codex 才去外接 codex CLI。 */
+function runnerOf(config) {
+  return config.runner === 'codex' ? 'codex' : 'api'
+}
+
+const INTRO = {
+  codex: '你在一个课程工作目录中工作。使用 ' + SKILL + ' 技能。',
+  api: '你在一个课程工作目录中工作。动手前先读 10_kb/课程资料标准.md，按它的字段标准整理。',
+}
+
+function buildPrompt(course, stageKey, instruction, runner) {
   const task = STAGE_TASKS[stageKey]
   const term = course.term ? '（' + course.term + '）' : ''
   const lines = [
-    '你在一个课程工作目录中工作。使用 ' + SKILL + ' 技能。',
+    INTRO[runner] || INTRO.api,
     '',
     '课程：' + course.name + term,
     '课程目录：当前目录',
@@ -218,6 +380,7 @@ function buildPrompt(course, stageKey, instruction) {
 
 const queue = []
 const children = new Map()
+const aborts = new Map()
 let running = false
 let cachedConfig = null
 
@@ -347,6 +510,8 @@ async function patchJob(root, courseId, id, patch) {
 export async function createJob(root, courseId, input) {
   const course = await readJson(coursePaths(root, courseId).meta)
   if (!course) throw new Error('课程不存在')
+  const config = await loadConfig()
+  const runner = runnerOf(config)
   const stageKey = String(input.stage || '')
   if (stageKey !== FULL_PIPELINE && !STAGE_TASKS[stageKey]) {
     throw new Error('未知阶段：' + stageKey)
@@ -358,6 +523,7 @@ export async function createJob(root, courseId, input) {
     id,
     courseId,
     stage: stageKey,
+    runner,
     title: String(input.title || (STAGE_TASKS[stageKey] ? STAGE_TASKS[stageKey].title : '自定义任务')),
     instruction,
     status: 'queued',
@@ -367,7 +533,7 @@ export async function createJob(root, courseId, input) {
     exitCode: null,
     summary: '',
     error: '',
-    prompt: buildPrompt(course, stageKey, instruction),
+    prompt: buildPrompt(course, stageKey, instruction, runner),
   }
   await writeJson(jobPaths(root, courseId, id).meta, job)
   queue.push({ root, courseId, id })
@@ -412,14 +578,8 @@ function describeEvent(event) {
   return null
 }
 
-async function runJob(root, courseId, id) {
-  const config = await loadConfig()
-  const paths = jobPaths(root, courseId, id)
-  const job = await readJson(paths.meta)
-  if (!job) return
-  const dir = coursePaths(root, courseId).dir
-  await patchJob(root, courseId, id, { status: 'running', startedAt: new Date().toISOString() })
-
+/** 外接 codex CLI 的跑法。日志流由 runJob 建，这里只管把过程写进去。 */
+async function runCodexJob({ config, job, dir, paths, writeLog, id }) {
   const args = [
     'exec',
     '-C',
@@ -455,14 +615,7 @@ async function runJob(root, courseId, id) {
   child.stdin.end(job.prompt)
   children.set(id, child)
 
-  await fsp.mkdir(path.dirname(paths.log), { recursive: true })
   const rawStream = createWriteStream(paths.raw, { flags: 'a' })
-  const logStream = createWriteStream(paths.log, { flags: 'a' })
-  const writeLog = (text) => {
-    if (text) logStream.write(text + '\n')
-  }
-  writeLog('# ' + job.title)
-  writeLog('# 开始：' + new Date().toISOString())
 
   let buffer = ''
   child.stdout.on('data', (chunk) => {
@@ -498,8 +651,6 @@ async function runJob(root, courseId, id) {
   })
 
   rawStream.end()
-  logStream.end()
-  children.delete(id)
 
   let summary = ''
   try {
@@ -508,20 +659,129 @@ async function runJob(root, courseId, id) {
     summary = ''
   }
 
+  return { exitCode, summary }
+}
+
+/** 自己调 API 的跑法：模型通过工具读写课程目录，产物落盘后由 runJob 统一验收。 */
+async function runApiJob({ config, job, dir, paths, writeLog, id }) {
+  const api = apiConfig(config)
+  const controller = new AbortController()
+  aborts.set(id, controller)
+  const rawStream = createWriteStream(paths.raw, { flags: 'a' })
+  try {
+    const result = await runAgent({
+      courseDir: dir,
+      prompt: job.prompt,
+      api,
+      signal: controller.signal,
+      onEvent: writeLog,
+      onRaw: (entry) => rawStream.write(JSON.stringify(entry) + '\n'),
+    })
+    if (result.exhausted) writeLog('到 ' + api.maxRounds + ' 轮还没停，先收工')
+    await fsp.writeFile(paths.last, result.summary + '\n', 'utf8')
+    return { exitCode: 0, summary: result.summary }
+  } finally {
+    rawStream.end()
+    aborts.delete(id)
+  }
+}
+
+async function runJob(root, courseId, id) {
+  const config = await loadConfig()
+  const paths = jobPaths(root, courseId, id)
+  const job = await readJson(paths.meta)
+  if (!job) return
+  const dir = coursePaths(root, courseId).dir
+  await patchJob(root, courseId, id, { status: 'running', startedAt: new Date().toISOString() })
+
+  await fsp.mkdir(path.dirname(paths.log), { recursive: true })
+  const logStream = createWriteStream(paths.log, { flags: 'a' })
+  const writeLog = (text) => {
+    if (text) logStream.write(text + '\n')
+  }
+  writeLog('# ' + job.title)
+  writeLog('# 开始：' + new Date().toISOString())
+
+  const runner = runnerOf(config)
+  const context = { config, job, dir, paths, writeLog, id }
+  const grow = STAGE_TASKS[job.stage]?.grows
+  const growFile = grow ? path.resolve(dir, grow.path) : ''
+  const before = growFile ? await countItems(growFile) : 0
+  let exitCode = -1
+  let summary = ''
+  let failure = ''
+  let missing = []
+  let warning = ''
+  try {
+    const result = runner === 'codex' ? await runCodexJob(context) : await runApiJob(context)
+    exitCode = result.exitCode
+    summary = result.summary
+    missing = exitCode === 0 ? await missingArtifacts(dir, job.stage) : []
+    if (missing.length) writeLog('任务没有产出预期的产物：' + missing.join('、'))
+    if (growFile && exitCode === 0 && !missing.length) {
+      const after = await countItems(growFile)
+      if (after <= before) {
+        warning = `${grow.label}没有变化（还是 ${after} 条）：${grow.reason}，翻下面的日志确认`
+        writeLog('[提示] ' + warning)
+      }
+    }
+  } catch (error) {
+    failure =
+      error && error.name === 'AbortError'
+        ? '任务被取消'
+        : String(error && error.message ? error.message : error)
+    writeLog('[失败] ' + failure)
+  } finally {
+    children.delete(id)
+    logStream.end()
+  }
+
+  const error = failure
+    ? failure
+    : exitCode !== 0
+      ? runner === 'codex'
+        ? 'codex 退出码 ' + exitCode
+        : '任务没跑完（退出码 ' + exitCode + '）'
+      : missing.length
+        ? '任务没有产出预期的产物（缺 ' + missing.join('、') + '），多半是环境问题，看下面的日志'
+        : ''
+  const canceled = failure === '任务被取消'
+
   await patchJob(root, courseId, id, {
-    status: exitCode === 0 ? 'done' : 'failed',
+    status: error ? (canceled ? 'canceled' : 'failed') : 'done',
     exitCode,
     finishedAt: new Date().toISOString(),
     summary: summary.slice(0, 6000),
-    error: exitCode === 0 ? '' : 'codex 退出码 ' + exitCode,
+    error,
+    warning,
   })
 }
 
 export function cancelJob(id) {
+  const controller = aborts.get(id)
   const child = children.get(id)
-  if (!child) return false
-  child.kill()
+  if (!controller && !child) return false
+  if (controller) {
+    controller.abort()
+    aborts.delete(id)
+  }
+  child?.kill()
   return true
+}
+
+/** 给 /api/health 用：现在走哪条路、用的哪个模型。key 不外传。 */
+export async function runnerInfo() {
+  const config = await loadConfig()
+  const api = apiConfig(config)
+  return {
+    runner: runnerOf(config),
+    model: api.model,
+    baseUrl: api.baseUrl,
+    hasApiKey: Boolean(api.apiKey),
+    allowCommands: api.allowCommands,
+    codexSandbox: config.codexSandbox || 'workspace-write',
+    codexCommand: config.codexCommand || 'codex',
+  }
 }
 
 export async function recoverJobs(root) {

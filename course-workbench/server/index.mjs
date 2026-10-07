@@ -12,6 +12,7 @@ import {
   deleteCourse,
   ensureMaterialStandard,
   getCourse,
+  isCourseId,
   isStage,
   listCourses,
   listFiles,
@@ -31,6 +32,7 @@ import {
   getJobLog,
   listJobs,
   recoverJobs,
+  runnerInfo,
   stageCatalog,
 } from './pipeline.mjs'
 
@@ -116,13 +118,13 @@ async function handleApi(req, res, url) {
   const method = req.method || 'GET'
 
   if (segments[1] === 'health') {
+    const runner = await runnerInfo()
     return sendJson(res, 200, {
       ok: true,
       courseRoot: COURSE_ROOT,
       stages: STAGES.length,
       jobs: stageCatalog().length,
-      codexSandbox: config.codexSandbox || 'workspace-write',
-      codexCommand: config.codexCommand || 'codex',
+      ...runner,
     })
   }
 
@@ -178,6 +180,7 @@ async function handleApi(req, res, url) {
 
   if (segments[1] === 'courses' && segments.length >= 3) {
     const id = decodeURIComponent(segments[2])
+    if (!isCourseId(id)) return sendError(res, 400, '非法课程 id')
     const rest = segments.slice(3)
 
     if (rest.length === 0) {
@@ -266,6 +269,27 @@ async function handleApi(req, res, url) {
           sizeLabel: formatBytes(stat.size),
         },
       })
+    }
+
+    if (rest[0] === 'file' && method === 'DELETE') {
+      const rel = url.searchParams.get('path') || ''
+      const mode = url.searchParams.get('questions') === 'drop' ? 'drop' : 'keep'
+      let target
+      try {
+        target = resolveInCourse(COURSE_ROOT, id, rel)
+      } catch {
+        return sendError(res, 400, '非法路径')
+      }
+      try {
+        const stat = await fsp.stat(target)
+        if (!stat.isFile()) return sendError(res, 400, '只能删文件')
+      } catch {
+        return sendError(res, 404, '找不到这个文件')
+      }
+      await fsp.unlink(target)
+      const pruned = await pruneProducts(COURSE_ROOT, id, rel, mode)
+      await touchCourse(COURSE_ROOT, id)
+      return sendJson(res, 200, { ok: true, ...pruned })
     }
 
     if (rest[0] === 'quiz' && rest[1] === 'record' && method === 'POST') {
@@ -359,6 +383,113 @@ async function touchCourse(root, id) {
   if (!meta) return
   meta.updatedAt = new Date().toISOString()
   await fsp.writeFile(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8')
+}
+
+/** 解析课程目录内的相对路径；越界或不存在返回空串。 */
+async function resolveOptional(root, id, rel) {
+  try {
+    const target = resolveInCourse(root, id, rel)
+    return (await pathExists(target)) ? target : ''
+  } catch {
+    return ''
+  }
+}
+
+/** 摘掉标题里带这个文件名的小节：从「## 文件名」到下一个同级或更高级标题之前。 */
+function dropSection(text, name) {
+  const kept = []
+  let skipping = false
+  for (const line of String(text).split(/\r?\n/)) {
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+    if (heading) {
+      const level = heading[1].length
+      if (!skipping && level === 2 && heading[2].includes(name)) {
+        skipping = true
+        continue
+      }
+      if (skipping && level <= 2) skipping = false
+    }
+    if (!skipping) kept.push(line)
+  }
+  return kept.join('\n')
+}
+
+/**
+ * 删掉图片后收拾引用它的产物，免得界面上挂着打不开的缩略图或者指不到的出处：
+ * - 09_quiz/bank.json 的题、06_outline/outline.json 的知识点：drop 连内容一起删，
+ *   keep 只摘掉 images 里指向这张图的引用；
+ * - 06_outline/图片知识点.md、07_notes/图片笔记.md 按图片文件名分节，drop 时整段摘掉。
+ * 路径对不上任何东西就什么都不做。
+ */
+async function pruneProducts(root, id, relPath, mode) {
+  const out = { dropped: 0, kept: 0, pointsRemoved: 0, pointsUntagged: 0, notesRemoved: 0 }
+  const ref = String(relPath).split('\\').join('/')
+  const hasRef = (entry) => (entry.images || []).some((image) => String(image) === ref)
+  const untag = (entry) => ({
+    ...entry,
+    images: (entry.images || []).filter((image) => String(image) !== ref),
+  })
+
+  const bankPath = await resolveOptional(root, id, '09_quiz/bank.json')
+  const bank = bankPath ? await readJson(bankPath) : null
+  if (Array.isArray(bank?.items)) {
+    const touched = bank.items.filter(hasRef)
+    if (touched.length) {
+      bank.items = mode === 'drop' ? bank.items.filter((item) => !hasRef(item)) : bank.items.map((item) => (hasRef(item) ? untag(item) : item))
+      bank.updated = new Date().toISOString().slice(0, 10)
+      await fsp.writeFile(bankPath, JSON.stringify(bank, null, 2) + '\n', 'utf8')
+      if (mode === 'drop') out.dropped = touched.length
+      else out.kept = touched.length
+    }
+  }
+
+  const outlinePath = await resolveOptional(root, id, '06_outline/outline.json')
+  const outline = outlinePath ? await readJson(outlinePath) : null
+  if (Array.isArray(outline?.units)) {
+    let touched = 0
+    const emptied = new Set()
+    for (const unit of outline.units) {
+      for (const section of unit.sections || []) {
+        const points = section.points || []
+        const hits = points.filter(hasRef).length
+        if (hits) {
+          const next =
+            mode === 'drop'
+              ? points.filter((point) => !hasRef(point))
+              : points.map((point) => (hasRef(point) ? untag(point) : point))
+          touched += hits
+          section.points = next
+          if (mode === 'drop' && !next.length) emptied.add(section)
+        }
+      }
+    }
+    if (emptied.size) {
+      outline.units = outline.units
+        .map((unit) => ({ ...unit, sections: (unit.sections || []).filter((section) => !emptied.has(section)) }))
+        .filter((unit) => (unit.sections || []).length > 0)
+    }
+    if (touched) {
+      if (mode === 'drop') out.pointsRemoved = touched
+      else out.pointsUntagged = touched
+      await fsp.writeFile(outlinePath, JSON.stringify(outline, null, 2) + '\n', 'utf8')
+    }
+  }
+
+  if (mode === 'drop') {
+    const base = ref.split('/').pop()
+    for (const rel of ['06_outline/图片知识点.md', '07_notes/图片笔记.md']) {
+      const file = await resolveOptional(root, id, rel)
+      if (!file) continue
+      const text = await fsp.readFile(file, 'utf8')
+      const stripped = dropSection(text, base)
+      if (stripped !== text) {
+        await fsp.writeFile(file, stripped, 'utf8')
+        out.notesRemoved += 1
+      }
+    }
+  }
+
+  return out
 }
 
 async function serveStatic(res, pathname) {

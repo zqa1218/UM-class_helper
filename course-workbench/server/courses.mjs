@@ -71,7 +71,23 @@ export async function writeJson(file, value) {
   await fsp.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 
+/**
+ * 课程 id 只能是 root 下的一层目录名。百分号编码的 `%2e%2e` 不会被 URL 归一化掉，
+ * 一旦漏进 path.join 就会解析到课程目录以外，删除/读取都越界。
+ */
+export function isCourseId(id) {
+  return (
+    typeof id === 'string' &&
+    id !== '' &&
+    id !== '.' &&
+    id !== '..' &&
+    !id.includes('/') &&
+    !id.includes('\\')
+  )
+}
+
 function courseDir(root, id) {
+  if (!isCourseId(id)) throw new Error('非法课程 id')
   return path.join(root, id)
 }
 

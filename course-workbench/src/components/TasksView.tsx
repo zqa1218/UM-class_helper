@@ -10,6 +10,8 @@ interface Props {
   onFinished: () => void
 }
 
+type Health = Awaited<ReturnType<typeof api.health>>
+
 const STATUS_LABEL: Record<string, string> = {
   queued: '排队中',
   running: '进行中',
@@ -24,7 +26,7 @@ export default function TasksView({ courseId, onFinished }: Props) {
   const [selected, setSelected] = useState('')
   const [log, setLog] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [sandbox, setSandbox] = useState('')
+  const [health, setHealth] = useState<Health | null>(null)
   const finishedRef = useRef<Set<string>>(new Set())
 
   const { data, error, reload: loadJobs, setError } = useLoader(
@@ -36,7 +38,7 @@ export default function TasksView({ courseId, onFinished }: Props) {
   useEffect(() => {
     void api
       .health()
-      .then((health) => setSandbox(health.codexSandbox || ''))
+      .then(setHealth)
       .catch(() => undefined)
     void api
       .stages()
@@ -105,10 +107,25 @@ export default function TasksView({ courseId, onFinished }: Props) {
   return (
     <Panel
       title="整理任务"
-      hint="每个任务会调起一次 Codex 会话，在课程目录里按流水线技能执行，产物直接落到对应目录。一次只跑一个，排在后面的会等前面结束。"
+      hint={
+        health?.runner === 'api'
+          ? `每个任务会调 ${health.model || '未配置的模型'} 在课程目录里按流水线规则执行，产物直接落到对应目录。一次只跑一个，排在后面的会等前面结束。`
+          : '每个任务会调起一次 Codex 会话，在课程目录里按流水线技能执行，产物直接落到对应目录。一次只跑一个，排在后面的会等前面结束。'
+      }
       error={error}
     >
-      {sandbox === 'danger-full-access' && (
+      {health?.runner === 'api' && !health.hasApiKey && (
+        <p className="notice notice--due" style={{ marginBottom: 16 }}>
+          还没读到 API key，任务一跑就会失败。在 workbench.config.json 的 api.apiKeyEnv 指的环境变量里
+          设好 key（默认 WORKBENCH_API_KEY），或直接写进 api.apiKey，然后重启服务。
+        </p>
+      )}
+      {health?.runner === 'api' && health.hasApiKey && !health.model && (
+        <p className="notice notice--due" style={{ marginBottom: 16 }}>
+          没配 api.model，任务一跑就会失败。在 workbench.config.json 里补上模型名（例如 deepseek-chat）。
+        </p>
+      )}
+      {health?.runner === 'codex' && health.codexSandbox === 'danger-full-access' && (
         <p className="notice notice--due" style={{ marginBottom: 16 }}>
           当前沙箱模式是 danger-full-access：任务里的 Codex 可以读写本机任意文件，不再限制在课程目录内。
           本机的沙箱助手因为 .codex\.sandbox-bin 权限问题用不了 workspace-write，所以先这样跑。
@@ -171,6 +188,7 @@ export default function TasksView({ courseId, onFinished }: Props) {
               <span>
                 <span className="milestone-row__title">{job.title}</span>
                 {job.error && <div className="milestone-row__note">{job.error}</div>}
+                {!job.error && job.warning && <div className="milestone-row__note">{job.warning}</div>}
               </span>
               <span className="inline-actions">
                 <button className="btn" type="button" onClick={() => setSelected(job.id)}>

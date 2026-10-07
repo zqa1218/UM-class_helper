@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useLoader } from '../loader'
 import type { QuizItem } from '../types'
 import Panel from './Panel'
+import QuizImages from './QuizImages'
 
 interface Props {
   courseId: string
@@ -95,13 +96,6 @@ export default function QuizView({ courseId }: Props) {
       onRefresh={() => void reload()}
       loading={loading}
       loadingText="正在读取题库…"
-      empty={
-        data?.missing
-          ? '还没有题库。先在大纲里选好范围，再跑一次「出题」任务。'
-          : visible.length === 0
-            ? '这个范围里还没有题。'
-            : undefined
-      }
       actions={
         <button className="btn" type="button" onClick={reset}>
           重做本页
@@ -132,6 +126,8 @@ export default function QuizView({ courseId }: Props) {
         </div>
       </div>
 
+      <QuizImages courseId={courseId} onBankChanged={() => void reload()} />
+
       {tags.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
           {tags.map((entry) => (
@@ -148,72 +144,97 @@ export default function QuizView({ courseId }: Props) {
         </div>
       )}
 
-      <>
-        <p className="mono">共 {visible.length} 题</p>
-        {visible.map((item) => {
-          const shown = revealed[item.id]
-          const chosen = picked[item.id] || []
-          const answer = (item.answer || []).map((entry) => String(entry).trim().toUpperCase())
-          return (
-            <article className="quiz-item" key={item.id}>
-              <div className="quiz-item__meta">
-                <span>{item.id}</span>
-                <span>{TYPE_LABEL[item.type] || item.type}</span>
-                {item.difficulty && <span>{item.difficulty}</span>}
-                <span>{(item.pointIds || []).join('、')}</span>
-                {item.isExtension && <span>拓展</span>}
-              </div>
-              <p className="quiz-item__stem">{item.stem}</p>
-              {item.options &&
-                Object.entries(item.options).map(([key, text]) => {
-                  const letter = key.toUpperCase()
-                  const isPicked = chosen.includes(letter)
-                  const isAnswer = answer.includes(letter)
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      className="option"
-                      data-picked={isPicked}
-                      data-correct={shown && isAnswer}
-                      data-wrong={shown && isPicked && !isAnswer}
-                      onClick={() => togglePick(item, letter)}
-                    >
-                      <span className="option__key">{letter}</span>
-                      <span>{text}</span>
-                    </button>
-                  )
-                })}
-              <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-                {!shown ? (
-                  <button
-                    className="btn btn--primary"
-                    type="button"
-                    onClick={() => void reveal(item)}
-                    disabled={chosen.length === 0}
-                  >
-                    显示答案
-                  </button>
-                ) : (
-                  <span className="mono">
-                    答案：{answer.join('、')}　{result[item.id] ? '答对了' : '再看看解析'}
-                  </span>
+      {visible.length === 0 ? (
+        <div className="empty">
+          {data?.missing
+            ? '还没有题库。上面传题目截图可以直接整理进来，也可以先在大纲里选好范围再跑一次「出题」任务。'
+            : '这个范围里还没有题。'}
+        </div>
+      ) : (
+        <>
+          <p className="mono">共 {visible.length} 题</p>
+          {visible.map((item) => {
+            const shown = revealed[item.id]
+            const chosen = picked[item.id] || []
+            const answer = (item.answer || []).map((entry) => String(entry).trim().toUpperCase())
+            return (
+              <article className="quiz-item" key={item.id}>
+                <div className="quiz-item__meta">
+                  <span>{item.id}</span>
+                  <span>{TYPE_LABEL[item.type] || item.type}</span>
+                  {item.difficulty && <span>{item.difficulty}</span>}
+                  <span>{(item.pointIds || []).join('、')}</span>
+                  {item.isExtension && <span>拓展</span>}
+                </div>
+                <p className="quiz-item__stem">{item.stem}</p>
+                {(item.images || []).length > 0 && (
+                  <div className="thumb-grid">
+                    {(item.images || []).map((path) => (
+                      <a
+                        className="thumb"
+                        key={path}
+                        href={api.rawUrl(courseId, path)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="打开原图"
+                      >
+                        <img src={api.rawUrl(courseId, path)} alt="题目原图" loading="lazy" />
+                        <span className="thumb__name mono">{path.split('/').pop()}</span>
+                      </a>
+                    ))}
+                  </div>
                 )}
-              </div>
-              {shown && item.explanation && (
-                <div className="explain">
-                  {item.explanation}
-                  {(item.sources || []).length > 0 && (
-                    <div className="mono" style={{ marginTop: 6 }}>
-                      溯源：{item.sources?.join('；')}
-                    </div>
+                {item.options &&
+                  Object.entries(item.options).map(([key, text]) => {
+                    const letter = key.toUpperCase()
+                    const isPicked = chosen.includes(letter)
+                    const isAnswer = answer.includes(letter)
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className="option"
+                        data-picked={isPicked}
+                        data-correct={shown && isAnswer}
+                        data-wrong={shown && isPicked && !isAnswer}
+                        onClick={() => togglePick(item, letter)}
+                      >
+                        <span className="option__key">{letter}</span>
+                        <span>{text}</span>
+                      </button>
+                    )
+                  })}
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {!shown ? (
+                    <button
+                      className="btn btn--primary"
+                      type="button"
+                      onClick={() => void reveal(item)}
+                      disabled={chosen.length === 0}
+                    >
+                      显示答案
+                    </button>
+                  ) : (
+                    <span className="mono">
+                      答案：{answer.join('、')}　{result[item.id] ? '答对了' : '再看看解析'}
+                    </span>
                   )}
                 </div>
-              )}
-            </article>
-          )
-        })}
-      </>
+                {shown && item.explanation && (
+                  <div className="explain">
+                    {item.explanation}
+                    {(item.sources || []).length > 0 && (
+                      <div className="mono" style={{ marginTop: 6 }}>
+                        溯源：{item.sources?.join('；')}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </article>
+            )
+          })}
+        </>
+      )}
     </Panel>
   )
 }

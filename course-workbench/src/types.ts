@@ -83,6 +83,8 @@ export interface Job {
   exitCode: number | null
   summary: string
   error: string
+  /** 跑完了但结果可疑时的提示（例如题库条数没涨），不影响 done/failed。 */
+  warning?: string
 }
 
 export interface QuizItem {
@@ -95,6 +97,8 @@ export interface QuizItem {
   pointIds?: string[]
   difficulty?: string
   sources?: string[]
+  /** 题目来自截图时，原图在课程目录里的相对路径，练习页会把它显示出来 */
+  images?: string[]
   isExtension?: boolean
   attempts?: number
   wrongCount?: number
@@ -107,6 +111,8 @@ export interface OutlinePoint {
   keywords?: string[]
   level?: string
   sources?: string[]
+  /** 知识点是从笔记照片里整理的时，原图在课程目录里的相对路径 */
+  images?: string[]
   hasSupplement?: boolean
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 
 import { api } from '../api'
 import { errorMessage, useLoader } from '../loader'
@@ -13,6 +14,8 @@ interface Props {
   hint: string
   emptyHint: string
   prefer?: string[]
+  /** 固定显示在文件列表上方的内容（由 Panel 原样透传） */
+  extra?: ReactNode
 }
 
 const IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i
@@ -36,6 +39,7 @@ export default function DocumentBrowser({
   hint,
   emptyHint,
   prefer = [],
+  extra,
 }: Props) {
   const preferKey = prefer.join(',')
   const { data, error, loading, reload } = useLoader(
@@ -80,6 +84,7 @@ export default function DocumentBrowser({
     <Panel
       title={title}
       hint={hint}
+      extra={extra}
       onRefresh={() => void reload()}
       error={error}
       loading={loading}

@@ -371,7 +371,7 @@ export default function App() {
                   title="笔记与讲课流程"
                   hint="图文笔记、讲课流程、一页总结都在这里；图会直接内嵌显示。"
                   emptyHint="还没有笔记。先有转写和课件解析，再跑「写笔记、讲课流程与总结」。"
-                  prefer={['notes.md', 'lecture-flow.md', 'summary.md']}
+                  prefer={['notes.md', '图片笔记.md', 'lecture-flow.md', 'summary.md']}
                 />
               )}
 
