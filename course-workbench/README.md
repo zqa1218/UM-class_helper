@@ -76,10 +76,12 @@ _jobs/               任务日志
 - `api.visionBaseUrl` / `api.visionModel` — 识图单独走哪个接口和模型，不填就跟 `baseUrl` / `model`
 - `api.visionApiKeyEnv` / `api.visionApiKey` — 识图用的 key，不填就用主接口那把
 - `codexCommand` / `codexSandbox` / `codexExtraArgs` — 只有 `runner` 是 `codex` 时才用
-- `moodle` — 从 UM Moodle 拉课件用的登录凭据（`baseUrl` / `session` / `token` / `include`），见「Moodle 课件怎么自动拉」
+- `moodle` — 从 UM Moodle 拉课件用的登录凭据（`baseUrl` / `session` / `token` / `username` / `include`），
+  `session` 由「从 Moodle 导入」面板里的登录自动写入，见「Moodle 课件怎么自动拉」
 - `autoDigestSlides` — 传课件（PPT / PDF）后是否自动排「整理课件知识点集锦」，默认开；想省模型就设 `false`
 
 环境变量 `PORT`、`COURSE_ROOT` 可以直接覆盖端口与课程目录，冒烟测试用的就是这两个。
+`WORKBENCH_CONFIG` 换一份配置文件跑（默认 `workbench.config.json`）。
 `WORKBENCH_API_BASE_URL`、`WORKBENCH_API_MODEL`、`WORKBENCH_API_KEY` 临时覆盖 api 段，方便换模型试跑。
 `WORKBENCH_MOODLE_BASE_URL`、`WORKBENCH_MOODLE_SESSION`、`WORKBENCH_MOODLE_TOKEN` 临时覆盖 moodle 段。
 
@@ -222,7 +224,7 @@ npm run calendar   # 也可以命令行刷新，结果写进 calendars/
 课件不用一节一节点下载。填一次课程 id，工作台自己把 PPT / PDF 按周拉进 `00_source/week-NN/`，
 人只管补录音：
 
-1. 「材料」页切到「本次课材料」，展开「从 Moodle 导入」。
+1. 「材料」页切到「本次课材料」，展开「从 Moodle 导入」，先登录一次（下面「登录」一节）。
 2. 填课程 id —— 就是网址里 `view.php?id=` 后面那串数字（例如 `44187`），整条网址粘进去也行。
 3. 点「读取目录」先看一眼：课程名、每节有几个课件、每节的日期时间都对不对。
 4. 勾要哪几节（默认勾上有课件的），点「导入勾选的 N 个课件」。
@@ -234,11 +236,27 @@ npm run calendar   # 也可以命令行刷新，结果写进 calendars/
 留给你在时间轴页补；「Week 1-2」「0 / 6」这种数字串不会被当成日期。有 Moodle token 时
 还会读课程日历上的活动时间。
 
+### 登录（内嵌在「从 Moodle 导入」面板里）
+
+填一次 UM 账号密码点「登录」就行，不用去翻浏览器 cookie：
+
+- 工作台自己把那一趟走完——Moodle 是本地表单就走本地，UM 这种全 SSO 会跟着 303 跳到
+  `websso.um.edu.mo/adfs/ls/`，把表单里的账号密码 POST 上去，再把 ADFS 丢回来的 SAML 断言
+  投回 Moodle 的 `saml2-acs.php`，拿到 `MoodleSession` 才算成功。
+- **只存会话，不存密码**：`MoodleSession` 写进 `workbench.config.json` 的 `moodle.session`
+  （这个文件在 `.gitignore` 里），账号写进 `moodle.username` 方便下次预填；密码只在那一次请求里用。
+- 登录失败会说明卡在哪一跳（例如「账号或密码没通过（登录页又回来了）」后面的
+  `走过：GET ummoodle…/login/index.php → 303；GET websso… → 200；POST websso… → 200`）。
+- 账号开了第二道验证（验证码 / 手机确认）时脚本登不进去，会直接说明——那就走下面的
+  `moodle.session` 手工粘贴，或者申请 Moodle Web service token。
+- 面板上还有「换账号」（重新登录）和「清凭据」（把会话从配置里删掉）。
+
 登录凭据（工作台不存密码，也不去下教材）：
 
-- `moodle.session` — 浏览器登录 `ummoodle.um.edu.mo` 后按 F12 → Application → Cookies，复制
-  `MoodleSession` 的值填进来。UM 是全 SSO（ADFS），没有本地密码登录，一般用这一条。
+- `moodle.session` — 一般由界面上的登录自动写入；要手工填的话：浏览器登录 `ummoodle.um.edu.mo`
+  后按 F12 → Application → Cookies，复制 `MoodleSession` 的值填进来。
 - `moodle.token` — 有 Moodle Web service / 手机端 token 的话填这里，走 JSON 接口更稳。
+- `moodle.username` — 只是拿来预填登录框的账号，可留空。
 - `moodle.include` — 只拉这些后缀，默认 `ppt` / `pptx` / `pdf`；要 Word 就加 `doc` / `docx`。
 - `moodle.baseUrl` — 默认 `https://ummoodle.um.edu.mo`，换学校改这里。
 

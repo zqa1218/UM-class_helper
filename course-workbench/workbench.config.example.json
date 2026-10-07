@@ -14,6 +14,7 @@
   "moodle": {
     "baseUrl": "https://ummoodle.um.edu.mo",
     "include": ["ppt", "pptx", "pdf"],
+    "username": "",
     "session": "",
     "token": ""
   },

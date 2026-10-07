@@ -476,6 +476,30 @@ const fakeApi = http.createServer((req, res) => {
 await new Promise((resolve) => fakeApi.listen(API_PORT, '127.0.0.1', resolve))
 
 // ---- 假的 Moodle：cookie 登录 + 课程页 + 一层跳转的 resource 下载 ----
+// SSO 是独立域名，登录那一趟要跨站，所以也单开一个服务
+const SSO_PORT = Number(process.env.SMOKE_SSO_PORT || PORT + 3)
+const SSO_BASE = `http://127.0.0.1:${SSO_PORT}`
+const SSO_FORM = (action, message = '') =>
+  [
+    '<!DOCTYPE html><html><head><title>Sign In</title></head><body>',
+    message ? `<span id="errorText">${message}</span>` : '',
+    `<form method="post" id="loginForm" action="${action}">`,
+    '<input id="userNameInput" name="UserName" type="email" value="">',
+    '<input id="passwordInput" name="Password" type="password">',
+    '<input type="checkbox" name="Kmsi" id="kmsiInput" value="true">',
+    '<input id="optionForms" type="hidden" name="AuthMethod" value="FormsAuthentication">',
+    '</form></body></html>',
+  ].join('')
+const SSO_MFA_FORM =
+  '<!DOCTYPE html><html><body><form method="post" action="/adfs/ls/">' +
+  '<input id="authMethodList" name="AuthMethod" type="hidden" value="PhoneAppOTP">' +
+  '<input name="otc" type="text"></form></body></html>'
+const SAML_POST = (acs) =>
+  `<!DOCTYPE html><html><body><form method="post" action="${acs}">` +
+  '<input type="hidden" name="SAMLResponse" value="assertion-ok">' +
+  '<input type="hidden" name="RelayState" value="/my/">' +
+  '</form></body></html>'
+
 const MOODLE_FILES = new Map([
   ['809', '第1讲-绪论.pdf'],
   ['810', '讲义.pdf'],
@@ -491,9 +515,32 @@ const fakeMoodle = http.createServer((req, res) => {
     res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' })
     res.end(body)
   }
-  // 没带会话一律跳 SSO，跟真的 UM Moodle 一样
-  if (!/MoodleSession=smoke-session/.test(cookie)) {
-    res.writeHead(302, { location: 'https://websso.um.edu.mo/adfs/ls/?SAMLRequest=smoke' })
+  const logged = /MoodleSession=(smoke-session|smoke-login)/.test(cookie)
+  // 登录页：没登录就 303 去 SSO，顺手发一个匿名会话——真 Moodle 也是这么走的
+  if (url.pathname === '/login/index.php') {
+    if (logged) {
+      res.writeHead(302, { location: `${MOODLE_BASE}/my/` })
+      return res.end()
+    }
+    res.writeHead(303, {
+      location: `${SSO_BASE}/adfs/ls/?SAMLRequest=smoke&RelayState=${encodeURIComponent(
+        `${MOODLE_BASE}/login/index.php`,
+      )}`,
+      'set-cookie': ['MoodleSession=smoke-anon; path=/; HttpOnly'],
+    })
+    return res.end()
+  }
+  // SSO 把断言 POST 回来：真的 Moodle 在这里校验断言、把会话登成用户
+  if (url.pathname.startsWith('/auth/saml2/sp/saml2-acs.php')) {
+    res.writeHead(302, {
+      location: `${MOODLE_BASE}/my/`,
+      'set-cookie': ['MoodleSession=smoke-login; path=/; HttpOnly'],
+    })
+    return res.end()
+  }
+  // 别的页面没带会话一律跳 SSO，跟真的 UM Moodle 一样
+  if (!logged) {
+    res.writeHead(302, { location: `${SSO_BASE}/adfs/ls/?SAMLRequest=smoke` })
     return res.end()
   }
   if (url.pathname === '/my/') return html(200, '<title>我的主页</title><p>Dashboard</p>')
@@ -518,6 +565,28 @@ const fakeMoodle = http.createServer((req, res) => {
   return html(404, '<title>没有这个页面</title>')
 })
 await new Promise((resolve) => fakeMoodle.listen(MOODLE_PORT, '127.0.0.1', resolve))
+
+// ---- 假 SSO（ADFS）：一个表单页 + 断言回投，够验登录这条链 ----
+const fakeSso = http.createServer(async (req, res) => {
+  const url = new URL(req.url, SSO_BASE)
+  const html = (status, body) => {
+    res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' })
+    res.end(body)
+  }
+  if (!url.pathname.startsWith('/adfs/ls')) return html(404, '<title>没有这个页面</title>')
+  const action = `${SSO_BASE}/adfs/ls/?SAMLRequest=smoke`
+  if (req.method !== 'POST') return html(200, SSO_FORM(action))
+  let body = ''
+  for await (const chunk of req) body += chunk
+  const form = new URLSearchParams(body)
+  const user = form.get('UserName') || ''
+  if (user === 'mfa-user') return html(200, SSO_MFA_FORM)
+  if (user !== 'student' || form.get('Password') !== 'good-pass') {
+    return html(200, SSO_FORM(action, 'The user name or password is incorrect.'))
+  }
+  return html(200, SAML_POST(`${MOODLE_BASE}/auth/saml2/sp/saml2-acs.php/1`))
+})
+await new Promise((resolve) => fakeSso.listen(SSO_PORT, '127.0.0.1', resolve))
 
 // ---- 课件抽文本：模型能读 PDF / PPTX 全靠这一步，不联网 ----
 const TINY_PDF = (() => {
@@ -581,11 +650,20 @@ await fsp.rm(docDir, { recursive: true, force: true })
 
 // ---- 起服务 ----
 const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'course-workbench-smoke-'))
+// 登录会把会话写回配置文件：测试用一份临时配置，别碰用户自己那份
+const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'course-workbench-config-'))
+const configPath = path.join(configDir, 'workbench.config.json')
+await fsp.writeFile(
+  configPath,
+  JSON.stringify({ courseRoot: tmp, moodle: { baseUrl: MOODLE_BASE } }, null, 2) + '\n',
+  'utf8',
+)
 const server = spawn(process.execPath, [path.join(appRoot, 'server/index.mjs')], {
   env: {
     ...process.env,
     PORT: String(PORT),
     COURSE_ROOT: tmp,
+    WORKBENCH_CONFIG: configPath,
     WORKBENCH_API_BASE_URL: `http://127.0.0.1:${API_PORT}/v1`,
     WORKBENCH_API_MODEL: 'smoke-model',
     WORKBENCH_API_KEY: 'smoke-key',
@@ -1174,11 +1252,77 @@ try {
   })
   check('不指定周次就整理全部', unknown.status === 201, String(unknown.status))
   await waitForJob(unknown.body?.job?.id)
+
+  // ---- 内嵌登录：填账号密码，工作台自己把 SSO 那一趟走完 ----
+  const login = (username, password) =>
+    json('/api/moodle/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
+
+  const badLogin = await login('student', 'wrong-pass')
+  check('密码不对时报 400', badLogin.status === 400, String(badLogin.status))
+  check(
+    '密码不对时说清是账号密码问题',
+    String(badLogin.body?.error || '').includes('账号或密码'),
+    String(badLogin.body?.error),
+  )
+  check(
+    '失败时回传走过的跳转，好查卡在哪',
+    Array.isArray(badLogin.body?.steps) && badLogin.body.steps.length >= 3,
+    JSON.stringify(badLogin.body?.steps),
+  )
+
+  const mfaLogin = await login('mfa-user', 'good-pass')
+  check(
+    '要二次验证时说清这条路走不通',
+    String(mfaLogin.body?.error || '').includes('第二道验证'),
+    String(mfaLogin.body?.error),
+  )
+
+  const okLogin = await login('student', 'good-pass')
+  check('登录成功返回 200', okLogin.status === 200, JSON.stringify(okLogin.body))
+  check('登录拿到 cookie 会话', okLogin.body?.result?.mode === 'cookie', JSON.stringify(okLogin.body?.result))
+  check('登录回报账号', okLogin.body?.result?.user === 'student', String(okLogin.body?.result?.user))
+  check(
+    '登录把 SSO 与断言那几跳都走了',
+    (okLogin.body?.result?.steps || []).length >= 4,
+    JSON.stringify(okLogin.body?.result?.steps) + ' :: ' + serverLog,
+  )
+  check('环境变量在场时给提醒', String(okLogin.body?.note || '').includes('环境变量'), String(okLogin.body?.note))
+
+  const saved = JSON.parse(await fsp.readFile(configPath, 'utf8'))
+  check(
+    '会话写进配置文件',
+    String(saved.moodle?.session || '').includes('MoodleSession=smoke-login'),
+    JSON.stringify(saved.moodle),
+  )
+  check(
+    '账号记下来、密码不落盘',
+    saved.moodle?.username === 'student' && !saved.moodle?.password,
+    JSON.stringify(saved.moodle),
+  )
+
+  const afterLogin = await json('/api/moodle/status')
+  check('状态里带上账号', afterLogin.body?.moodle?.username === 'student', JSON.stringify(afterLogin.body?.moodle))
+  const recheck = await json('/api/moodle/check', { method: 'POST' })
+  check('新会话能用', recheck.body?.result?.ok === true, JSON.stringify(recheck.body))
+
+  const out = await json('/api/moodle/logout', { method: 'POST' })
+  const cleared = JSON.parse(await fsp.readFile(configPath, 'utf8'))
+  check(
+    '清凭据把会话从配置文件里删掉',
+    out.status === 200 && !cleared.moodle?.session,
+    JSON.stringify(cleared.moodle),
+  )
 } finally {
   server.kill()
   fakeApi.close()
   fakeMoodle.close()
+  fakeSso.close()
   await fsp.rm(tmp, { recursive: true, force: true })
+  await fsp.rm(configDir, { recursive: true, force: true })
 }
 
 console.log(failures ? `\n${failures} 项失败` : '\n全部通过')

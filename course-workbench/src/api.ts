@@ -211,6 +211,21 @@ export const api = {
       { method: 'POST' },
     ),
 
+  /** 用账号密码登录 Moodle：会话存进 workbench.config.json，密码不落盘。 */
+  moodleLogin: (payload: { username: string; password: string }) =>
+    request<{
+      result: { ok: boolean; mode: string; site: string; user: string; steps: string[] }
+      note: string
+    }>('/api/moodle/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 清掉配置里存着的 Moodle 会话。 */
+  moodleLogout: () =>
+    request<{ moodle: MoodleStatus; note: string }>('/api/moodle/logout', { method: 'POST' }),
+
   /** 读一门 Moodle 课的目录，用来预览小节和课件，还不下载。 */
   moodleCourse: (courseId: string) =>
     request<{ course: MoodleCourse }>(

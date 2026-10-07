@@ -258,6 +258,8 @@ export interface MoodleStatus {
   /** 有 token 走接口，否则用登录后的 cookie；都没配就是空串。 */
   mode: '' | 'token' | 'cookie'
   configured: boolean
+  /** 上次登录用的账号，只是拿来预填输入框；密码从来不存。 */
+  username: string
 }
 
 export interface MoodleFile {

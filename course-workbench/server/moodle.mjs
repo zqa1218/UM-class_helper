@@ -8,6 +8,8 @@ import path from 'node:path'
  * 两种凭据，有哪个用哪个：
  * - token：Moodle Web service / 手机端的 token，走 JSON 接口（core_course_get_contents 等），最省事；
  * - session：浏览器里登录后的 MoodleSession cookie，走网页解析。UM 是全 SSO，一般用这个。
+ * 界面上可以直接填账号密码登录（moodleLogin）：Moodle 自己的登录表单走一遍，
+ * 站点是 SSO 的话就跟着跳到 IdP 表单、把断言跟回来，拿到会话再存进配置。
  * 凭据只从 workbench.config.json 的 moodle 段或环境变量读，不落进课程目录，也不回给前端。
  */
 
@@ -25,6 +27,8 @@ export function moodleConfig(config = {}) {
     baseUrl: first(env.WORKBENCH_MOODLE_BASE_URL, m.baseUrl, DEFAULT_BASE).replace(/\/+$/, ''),
     token: first(env.WORKBENCH_MOODLE_TOKEN, m.token),
     session: first(env.WORKBENCH_MOODLE_SESSION, m.session),
+    // 只记账号，方便下次登录时预填；密码从来不存
+    username: m.username || '',
     include: normalizeExts(m.include),
   }
 }
@@ -41,14 +45,16 @@ export function moodleStatus(cfg) {
     include: cfg.include,
     mode: cfg.token ? 'token' : cfg.session ? 'cookie' : '',
     configured: Boolean(cfg.token || cfg.session),
+    username: cfg.username || '',
   }
 }
 
 const AUTH_HINT = [
-  '还没配 Moodle 登录凭据。两种办法，挑一个：',
-  '① 浏览器登录 ummoodle 后按 F12 → Application → Cookies，把 MoodleSession 的值填进',
+  '还没配 Moodle 登录凭据。三种办法，挑一个：',
+  '① 在材料页的 Moodle 面板里直接填账号密码登录（推荐，会话自动存进 workbench.config.json）；',
+  '② 浏览器登录 ummoodle 后按 F12 → Application → Cookies，把 MoodleSession 的值填进',
   '   workbench.config.json 的 moodle.session（或设环境变量 WORKBENCH_MOODLE_SESSION）；',
-  '② 有 Moodle Web service token 的话，填 moodle.token（或设 WORKBENCH_MOODLE_TOKEN），走 JSON 接口更稳。',
+  '③ 有 Moodle Web service token 的话，填 moodle.token（或设环境变量 WORKBENCH_MOODLE_TOKEN）。',
 ].join('')
 
 function assertAuth(cfg) {
@@ -106,7 +112,222 @@ export async function moodleCheck(cfg) {
   if (/name="logintoken"/.test(text) || /id="page-login-index"/.test(text)) {
     throw new Error('Moodle 返回的是登录页，说明 MoodleSession 已过期或填错了。')
   }
-  return { ok: true, mode: 'cookie', site: decodeEntities(titleOf(text)), user: '' }
+  return { ok: true, mode: 'cookie', site: decodeEntities(titleOf(text)), user: currentUser(text) }
+}
+
+/** /my/ 页面上一般挂着当前用户名；读不到就留空，不影响别的。 */
+function currentUser(html) {
+  const raw = regexOne(html, /class=["'][^"']*usertext[^"']*["'][^>]*>([\s\S]{0,80}?)</i)
+  return clean(raw).slice(0, 40)
+}
+
+// ---- 内嵌登录：填账号密码，工作台自己把会话拿回来 ----
+
+/** 跳转目标像不像 SSO / IdP 的登录链路。 */
+const SSO_HINT = /(\/adfs\/|websso|\/idp\/|shibboleth|\/saml|login\.microsoftonline|auth\/saml2)/i
+
+/** 登录要跨 Moodle 和 IdP 两个域名，各存各的 cookie。 */
+function createJar() {
+  const store = new Map()
+  const hostOf = (url) => {
+    try {
+      return new URL(url).host
+    } catch {
+      return ''
+    }
+  }
+  const readSetCookie = (response) =>
+    typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : [response.headers.get('set-cookie')].filter(Boolean)
+  return {
+    absorb(url, response) {
+      const host = hostOf(url)
+      if (!host) return
+      const jar = store.get(host) || new Map()
+      for (const line of readSetCookie(response)) {
+        const pair = String(line).split(';')[0]
+        const at = pair.indexOf('=')
+        if (at <= 0) continue
+        const name = pair.slice(0, at).trim()
+        const value = pair.slice(at + 1).trim()
+        if (!value || /^(deleted|expired)$/i.test(value)) jar.delete(name)
+        else jar.set(name, value)
+      }
+      store.set(host, jar)
+    },
+    header(url) {
+      const jar = store.get(hostOf(url))
+      if (!jar || !jar.size) return ''
+      return [...jar].map(([name, value]) => `${name}=${value}`).join('; ')
+    },
+  }
+}
+
+/** 带 cookie 走一步。默认不自动跟跳转：登录是一跳一跳的，出问题要能看清是哪一跳。 */
+async function jarFetch(jar, url, { method = 'GET', form, headers = {}, redirect = 'manual', timeout = REQUEST_MS } = {}) {
+  const cookie = jar.header(url)
+  const response = await fetch(url, {
+    method,
+    headers: {
+      'user-agent': UA,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      ...(cookie ? { cookie } : {}),
+      ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+      ...headers,
+    },
+    body: form ? new URLSearchParams(form).toString() : undefined,
+    redirect,
+    signal: AbortSignal.timeout(timeout),
+  })
+  jar.absorb(url, response)
+  return response
+}
+
+const isRedirect = (response) => response.status >= 300 && response.status < 400
+
+function short(url) {
+  return String(url).replace(/[?#][\s\S]*$/, '').replace(/^https?:\/\//, '')
+}
+
+/**
+ * 页面里挑一个表单：优先带指定字段的那个——ADFS 的登录表单和「其他登录方式」表单
+ * 常常并排放在一页上，光取第一个会拿错。
+ */
+function pickForm(html, baseUrl, prefer = []) {
+  const parsed = [...String(html).matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/gi)].map((match) => {
+    const form = match[0]
+    const tag = form.match(/<form\b[^>]*>/i)[0]
+    const action = (tag.match(/action=["']([^"']*)["']/i) || [])[1] || ''
+    const fields = {}
+    for (const input of form.matchAll(/<input\b[^>]*>/gi)) {
+      const attrs = input[0]
+      const name = (attrs.match(/name=["']([^"']+)["']/i) || [])[1]
+      if (!name) continue
+      const type = ((attrs.match(/type=["']([^"']+)["']/i) || [])[1] || 'text').toLowerCase()
+      if (['submit', 'button', 'image', 'file', 'checkbox', 'radio', 'reset'].includes(type)) continue
+      fields[name] = decodeEntities((attrs.match(/value=["']([^"']*)["']/i) || [])[1] || '')
+    }
+    return { action: action ? new URL(action, baseUrl).toString() : baseUrl, fields }
+  })
+  if (!parsed.length) return null
+  for (const name of prefer) {
+    const found = parsed.find((form) => name in form.fields)
+    if (found) return found
+  }
+  return parsed[0]
+}
+
+/** 登录页又回来了 = 没通过；验证码页 = 二次验证，脚本这条路走不通。 */
+function loginFailure(text) {
+  if (/name=["']otc["']|oneTimePasscode|id=["']authMethodList["']|AdditionalAuthMethod|two[- ]?factor|多因素/i.test(text)) {
+    return '这个账号要过第二道验证（验证码 / 多因素），脚本登录走不通：改用「贴 cookie」，或者申请一个 Moodle Web service token。'
+  }
+  if (/id=["']errorText["']/i.test(text)) return '登录被拒绝：账号或密码不对。'
+  if (/name=["']Password["']/i.test(text) && !/SAMLResponse/.test(text)) {
+    return '账号或密码没通过（登录页又回来了）。确认一下密码没改、也没把邮箱账号和学生号搞混。'
+  }
+  return ''
+}
+
+/**
+ * 提交之后还得跟着 IdP 和 Moodle 来回跳：有的直接 302，有的丢回一个只有 hidden
+ * 字段、自动提交的表单（SAML POST 绑定）。这里统一走完，顺手认失败。
+ */
+async function walkLogin(jar, { url, response, steps, maxHops = 8 }) {
+  let current = url
+  for (let hop = 0; hop < maxHops; hop += 1) {
+    if (isRedirect(response)) {
+      const next = new URL(response.headers.get('location') || '', current).toString()
+      response = await jarFetch(jar, next, { headers: { referer: current } })
+      steps.push(`GET ${short(next)} → ${response.status}`)
+      current = next
+      continue
+    }
+    const text = await response.text()
+    const failure = loginFailure(text)
+    if (failure) throw new Error(failure)
+    const form = pickForm(text, current)
+    if (form && 'SAMLResponse' in form.fields) {
+      response = await jarFetch(jar, form.action, {
+        method: 'POST',
+        form: form.fields,
+        headers: { referer: current },
+      })
+      steps.push(`POST ${short(form.action)} → ${response.status}`)
+      current = form.action
+      continue
+    }
+    return { url: current, html: text }
+  }
+  throw new Error('登录跳转圈数太多，先停一下。')
+}
+
+/** 登录走完统一验一遍，顺便回报站点和用户名。 */
+async function finishLogin(cfg, jar, steps, fallbackUser) {
+  const session = jar.header(cfg.baseUrl)
+  if (!/(^|;\s*)MoodleSession=/.test(session)) {
+    throw new Error('流程走完了，但没拿到 MoodleSession：这个站点可能没开网页会话，试试 Moodle Web service token。')
+  }
+  const result = await moodleCheck({ ...cfg, token: '', session })
+  return { session, mode: 'cookie', site: result.site, user: result.user || fallbackUser, steps }
+}
+
+/**
+ * 界面里填账号密码直接登录：站点有本地登录表单就走本地；全 SSO 就跟到 IdP 表单，
+ * 把 SAML 断言带回来落地成 MoodleSession。密码只用在这一趟请求里，不落盘。
+ */
+export async function moodleLogin(cfg, { username, password } = {}) {
+  const user = String(username || '').trim()
+  const pass = String(password || '')
+  if (!user || !pass) throw new Error('账号和密码都要填。')
+  const jar = createJar()
+  const steps = []
+  try {
+    const loginUrl = `${cfg.baseUrl}/login/index.php`
+    let url = loginUrl
+    let response = await jarFetch(jar, loginUrl)
+    steps.push(`GET ${short(loginUrl)} → ${response.status}`)
+    let html = await response.text()
+
+    if (isRedirect(response)) {
+      const target = new URL(response.headers.get('location') || '', loginUrl).toString()
+      if (!SSO_HINT.test(target)) {
+        throw new Error(`Moodle 的登录页跳到了 ${target}，这条链路工作台不认，改用「贴 cookie」那条路。`)
+      }
+      let hopUrl = target
+      for (let hop = 0; hop < 6; hop += 1) {
+        response = await jarFetch(jar, hopUrl, { headers: { referer: url } })
+        steps.push(`GET ${short(hopUrl)} → ${response.status}`)
+        url = hopUrl
+        if (!isRedirect(response)) break
+        hopUrl = new URL(response.headers.get('location') || '', hopUrl).toString()
+      }
+      html = await response.text()
+    }
+
+    const form = pickForm(html, url, ['Password', 'logintoken', 'username'])
+    if (!form) {
+      throw new Error(loginFailure(html) || '登录页上没有找到能提交的表单，先用浏览器登一次看看这个站点怎么登录。')
+    }
+    // ADFS：UserName / Password / AuthMethod；Moodle 本地表单：username / password / logintoken
+    const local = 'logintoken' in form.fields || 'username' in form.fields
+    const fields = local
+      ? { ...form.fields, username: user, password: pass, anchor: '', rememberusername: '1' }
+      : { ...form.fields, UserName: user, Password: pass, AuthMethod: 'FormsAuthentication', Kmsi: 'false' }
+    response = await jarFetch(jar, form.action, {
+      method: 'POST',
+      form: fields,
+      headers: { referer: url, origin: new URL(url).origin },
+    })
+    steps.push(`POST ${short(form.action)} → ${response.status}`)
+    await walkLogin(jar, { url: form.action, response, steps })
+    return await finishLogin(cfg, jar, steps, user)
+  } catch (error) {
+    // 步骤摘要挂上去，界面上能看出卡在哪一跳
+    error.steps = steps
+    throw error
+  }
 }
 
 /** 课程大纲：优先 token 的 JSON 接口，否则解析课程页。 */

@@ -29,6 +29,7 @@ import {
   importMoodleFiles,
   moodleCheck,
   moodleConfig,
+  moodleLogin,
   moodleStatus,
   publicMoodleCourse,
 } from './moodle.mjs'
@@ -49,7 +50,9 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(here, '..')
 
-const config = (await readJson(path.join(appRoot, 'workbench.config.json'))) || {}
+// WORKBENCH_CONFIG 可以换一份配置跑（换机器、跑测试都用得上），默认还是 workbench.config.json
+const CONFIG_PATH = path.resolve(appRoot, process.env.WORKBENCH_CONFIG || 'workbench.config.json')
+const config = (await readJson(CONFIG_PATH)) || {}
 const PORT = Number(process.env.PORT || config.port || 8787)
 // COURSE_ROOT 可以用环境变量覆盖，冒烟测试用它指向临时目录
 const COURSE_ROOT = path.resolve(appRoot, process.env.COURSE_ROOT || config.courseRoot || './courses')
@@ -93,6 +96,18 @@ function sendJson(res, status, data) {
 
 function sendError(res, status, message) {
   sendJson(res, status, { error: message })
+}
+
+/** 登录、清凭据要落盘：整份配置写回去，别的段原样保留。 */
+async function saveConfig() {
+  await fsp.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf8')
+}
+
+/** 环境变量的优先级高于配置文件：用着环境变量的时候，写进文件也不生效，得跟人说一声。 */
+function envCredentialHint() {
+  return process.env.WORKBENCH_MOODLE_SESSION || process.env.WORKBENCH_MOODLE_TOKEN
+    ? '提醒：现在生效的是环境变量里的 Moodle 凭据，配置文件里这份要等环境变量撤掉才会用上。'
+    : ''
 }
 
 async function readJsonBody(req) {
@@ -153,6 +168,34 @@ async function handleApi(req, res, url) {
         return sendJson(res, 200, { result: await moodleCheck(cfg) })
       } catch (error) {
         return sendError(res, 400, String(error?.message || error))
+      }
+    }
+    if (action === 'login' && method === 'POST') {
+      const body = await readJsonBody(req).catch(() => ({}))
+      try {
+        const result = await moodleLogin(cfg, { username: body.username, password: body.password })
+        config.moodle = { ...(config.moodle || {}), session: result.session }
+        if (result.user) config.moodle.username = result.user
+        delete config.moodle.password
+        await saveConfig()
+        return sendJson(res, 200, {
+          result: { ok: true, mode: result.mode, site: result.site, user: result.user, steps: result.steps },
+          note: envCredentialHint(),
+        })
+      } catch (error) {
+        // 把最后几跳写进消息里：界面上直接就能看出卡在哪一步
+        const steps = Array.isArray(error?.steps) ? error.steps : []
+        const trail = steps.length ? `\n（走过：${steps.slice(-4).join('；')}）` : ''
+        return sendJson(res, 400, { error: String(error?.message || error) + trail, steps })
+      }
+    }
+    if (action === 'logout' && method === 'POST') {
+      try {
+        config.moodle = { ...(config.moodle || {}), session: '' }
+        await saveConfig()
+        return sendJson(res, 200, { moodle: moodleStatus(moodleConfig(config)), note: envCredentialHint() })
+      } catch (error) {
+        return sendError(res, 400, '清凭据失败：' + String(error?.message || error))
       }
     }
     if (action === 'course' && method === 'GET') {

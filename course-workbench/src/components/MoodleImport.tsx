@@ -47,6 +47,9 @@ export default function MoodleImport({ course, onImported }: Props) {
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [importer, setImporter] = useState('')
+  const [account, setAccount] = useState('')
+  const [secret, setSecret] = useState('')
+  const [showLogin, setShowLogin] = useState(false)
 
   const moodle = status?.moodle
   const fileCount = useMemo(
@@ -147,13 +150,64 @@ export default function MoodleImport({ course, onImported }: Props) {
     )
   }
 
+  /** 填账号密码直接登录：工作台替你把 Moodle / SSO 那一趟走完，会话存进配置文件。 */
+  const login = async () => {
+    const name = (account || moodle?.username || '').trim()
+    if (!name || !secret) {
+      setError('账号和密码都要填。')
+      return
+    }
+    setBusy('login')
+    setError('')
+    setNote('')
+    setPreview(null)
+    try {
+      const { result, note: extra } = await api.moodleLogin({ username: name, password: secret })
+      setSecret('')
+      setShowLogin(false)
+      setImporter(
+        `登录成功：${result.site || moodle?.baseUrl || ''}` +
+          (result.user ? `（${result.user}）` : '') +
+          (result.steps?.length ? `，一共走了 ${result.steps.length} 跳。` : '。'),
+      )
+      if (extra) setNote(extra)
+      await reloadStatus()
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const logout = async () => {
+    setBusy('logout')
+    setError('')
+    setNote('')
+    try {
+      const { note: extra } = await api.moodleLogout()
+      setPreview(null)
+      setImporter('')
+      setNote(extra || '已清掉存下来的 Moodle 会话。')
+      await reloadStatus()
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const loginOpen = showLogin || !moodle?.configured
+
   return (
     <details className="image-intake">
       <summary>
         从 Moodle 导入
         <span className="muted">
           {' '}
-          · {moodle?.configured ? `${SOURCE_LABEL[moodle.mode] || moodle.mode}已接好` : '还没配登录凭据'}
+          ·{' '}
+          {moodle?.configured
+            ? `${SOURCE_LABEL[moodle.mode] || moodle.mode}已接好${moodle.username ? `（${moodle.username}）` : ''}`
+            : '还没登录 Moodle'}
         </span>
       </summary>
 
@@ -161,16 +215,67 @@ export default function MoodleImport({ course, onImported }: Props) {
       {note && <p className="notice">{note}</p>}
       {importer && <p className="notice">{importer}</p>}
 
-      {!moodle?.configured && (
+      {loginOpen && !moodle?.configured && (
         <p className="notice">
-          先配一次登录凭据，工作台才能自己拉课件。两种办法挑一个：
-          <br />① 浏览器登录 {moodle?.baseUrl || 'ummoodle.um.edu.mo'} 后按 F12 → Application → Cookies，
-          把 <span className="mono">MoodleSession</span> 的值填进{' '}
-          <span className="mono">workbench.config.json</span> 的{' '}
-          <span className="mono">moodle.session</span>（或环境变量{' '}
-          <span className="mono">WORKBENCH_MOODLE_SESSION</span>）；
-          <br />② 有 Moodle Web service token 的话填 <span className="mono">moodle.token</span>，走 JSON 接口更稳。
-          <button className="btn" type="button" style={{ marginLeft: 10 }} onClick={() => void reloadStatus()}>
+          用 {moodle?.baseUrl || 'ummoodle.um.edu.mo'} 的账号登一次，工作台就能自己拉课件：
+          UM 走的是学校 SSO，登录这一趟由工作台代跑，之后把会话（不是密码）存进{' '}
+          <span className="mono">workbench.config.json</span>。
+        </p>
+      )}
+
+      {loginOpen && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+          <input
+            className="mono"
+            style={{ padding: '6px 9px', minWidth: 220 }}
+            placeholder="账号：学生号 / 邮箱"
+            autoComplete="username"
+            value={account || moodle?.username || ''}
+            onChange={(event) => setAccount(event.target.value)}
+          />
+          <input
+            className="mono"
+            type="password"
+            style={{ padding: '6px 9px', minWidth: 180 }}
+            placeholder="密码"
+            autoComplete="current-password"
+            value={secret}
+            onChange={(event) => setSecret(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void login()
+            }}
+          />
+          <button className="btn" type="button" disabled={busy !== ''} onClick={() => void login()}>
+            {busy === 'login' ? '登录中…' : moodle?.configured ? '换账号登录' : '登录'}
+          </button>
+          {moodle?.configured && (
+            <button
+              className="btn btn--tiny"
+              type="button"
+              disabled={busy !== ''}
+              onClick={() => setShowLogin(false)}
+            >
+              取消
+            </button>
+          )}
+        </div>
+      )}
+
+      {loginOpen && (
+        <p className="muted" style={{ marginTop: 6 }}>
+          密码只用在这一趟登录里，不写进任何文件；账号会记下来，下次帮你填好。
+          要是这个账号开了第二道验证（验证码 / 手机确认），这里登不进去，走下面那条老路。
+        </p>
+      )}
+
+      {!moodle?.configured && (
+        <p className="muted" style={{ marginTop: 6 }}>
+          登录走不通的老办法：浏览器登录 {moodle?.baseUrl || 'ummoodle.um.edu.mo'} 后按 F12 → Application →
+          Cookies，把 <span className="mono">MoodleSession</span> 的值填进{' '}
+          <span className="mono">workbench.config.json</span> 的 <span className="mono">moodle.session</span>
+          （或环境变量 <span className="mono">WORKBENCH_MOODLE_SESSION</span>）；有 Moodle Web service token
+          的话填 <span className="mono">moodle.token</span>，走 JSON 接口更稳。
+          <button className="btn btn--tiny" type="button" style={{ marginLeft: 10 }} onClick={() => void reloadStatus()}>
             重新检测
           </button>
         </p>
@@ -194,6 +299,17 @@ export default function MoodleImport({ course, onImported }: Props) {
             </button>
             <button className="btn btn--tiny" type="button" disabled={busy !== ''} onClick={() => void check()}>
               {busy === 'checking' ? '检测中…' : '检测连接'}
+            </button>
+            <button
+              className="btn btn--tiny"
+              type="button"
+              disabled={busy !== ''}
+              onClick={() => setShowLogin((value) => !value)}
+            >
+              换账号
+            </button>
+            <button className="btn btn--tiny" type="button" disabled={busy !== ''} onClick={() => void logout()}>
+              {busy === 'logout' ? '清理中…' : '清凭据'}
             </button>
           </div>
 
