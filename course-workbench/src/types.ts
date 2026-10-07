@@ -315,4 +315,8 @@ export interface MoodleImportResult {
   skipped: { name: string; reason: string }[]
   /** 顺手补进时间轴的上课节点（同日期同标题的不会重复加）。 */
   milestones: ExtractedScheduleItem[]
+  /** 有课件但还没录音的周次，等着补录音做完整上课分析。 */
+  missingRecordings: number[]
+  /** 导入后按周自动排上的「整理课件知识点集锦」任务。 */
+  digests: { week: number; id: string }[]
 }

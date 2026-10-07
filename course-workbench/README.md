@@ -77,6 +77,7 @@ _jobs/               任务日志
 - `api.visionApiKeyEnv` / `api.visionApiKey` — 识图用的 key，不填就用主接口那把
 - `codexCommand` / `codexSandbox` / `codexExtraArgs` — 只有 `runner` 是 `codex` 时才用
 - `moodle` — 从 UM Moodle 拉课件用的登录凭据（`baseUrl` / `session` / `token` / `include`），见「Moodle 课件怎么自动拉」
+- `autoDigestSlides` — 传课件（PPT / PDF）后是否自动排「整理课件知识点集锦」，默认开；想省模型就设 `false`
 
 环境变量 `PORT`、`COURSE_ROOT` 可以直接覆盖端口与课程目录，冒烟测试用的就是这两个。
 `WORKBENCH_API_BASE_URL`、`WORKBENCH_API_MODEL`、`WORKBENCH_API_KEY` 临时覆盖 api 段，方便换模型试跑。
@@ -243,3 +244,29 @@ npm run calendar   # 也可以命令行刷新，结果写进 calendars/
 
 凭据只从配置或环境变量读，不回传给前端，也不写进课程目录。cookie 会过期，过期后接口会明说
 「MoodleSession 过期或不对」，重新复制一次即可。同名文件不覆盖，重跑一遍只补新增的课件。
+
+## 课件先出知识点，录音再补完整分析
+
+课件和录音是两档事，不用互相等：
+
+**一档：只有课件。** 传进 `00_source/week-NN/` 的 PPT / PDF 会自动排一次「整理课件知识点集锦」
+（一周一个任务，配置里 `autoDigestSlides: false` 可关掉）。它做三件事：
+
+1. 逐页抽文本落到 `02_slides/`（抽不动的页在收尾说明里点名，不猜）；
+2. 知识点写进 `06_outline/outline.json` 的「课件知识点」单元，带稳定 ID（`SLD-01-01`）与页码出处；
+3. 写人读的 `06_outline/课件知识点集锦.md`，一个课件一块、按页列知识点。
+
+只要课件、不录音也能用：大纲页看知识点、按范围出题、画知识图谱都不受影响。
+
+课件的文本是工作台本地抽好再喂给模型的（PDF 走 `pdfjs-dist`，PPTX 解包读 XML），用的是
+`read_document` 工具，一页一段、页多了带 `from` 接着读。走自调 API 时模型手上没有 pdf 插件，
+`read_file` 硬读 PDF / PPTX 只会拿到乱码，所以这一步不能省。扫描件那种整页是图的课件抽不出文字，
+工具只会把页码点出来，得人工补图或换电子版。
+
+**二档：课件 + 录音 = 完整上课分析。** 录音（m4a / mp3 / wav / mp4）放进同一周之后，
+材料页出现「跑完整上课分析」按钮，跑的是「转写 → 对齐 → 纠错 → 补充 → 大纲 → 笔记 → 图谱」一整条。
+它比课件那一档慢得多、也贵得多，所以**录音传上来不会自动跑**，要自己点一下；
+想只做某一周，先选那一周的周次再点。转写稿、纠错清单、讲课流程这些都得有录音才做得出来。
+
+材料页的周次按钮上直接标着状态：「2 课件 · 缺录音」是课件到了、声音还没到；录音传进去后
+同一位置会变成「1 录音」，按钮也跟着出现。Moodle 导入完的清单里同样会点名「还缺录音的周」。

@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
+import { extractDocPages, formatDocPages } from './docs.mjs'
+
 /**
  * 不借助外部 codex 的跑法：直接调 OpenAI 兼容的 /chat/completions，
  * 工具循环（列目录 / 读文件 / 写文件 / 跑命令）自己实现。
@@ -33,7 +35,8 @@ const OCR_PROMPT = [
 const SYSTEM = [
   '你在一个课程工作目录里干活，目录按阶段分好了：10_kb/、00_source/、01_transcript/ …… 09_quiz/。',
   '文件工具只认这个目录，路径越界会被拒绝；run_command 也在课程目录里起。',
-  '遇到图片（题目截图、板书照片、课件截图）先用 read_image 认字，不要凭常识猜图里的内容。',
+  '课件（PDF / PPTX）用 read_document 按页抽文本，图片（题目截图、板书照片）用 read_image 认字；',
+  '图和课件都要真读过再写，不要凭常识猜里面的内容。',
   '干活方式：先 list_files / read_file 看清楚有什么，再 write_file / run_command 动手。',
   '不要凭课程名或常识编造内容：读不出来的字段留空，拿不准的地方在产物里写明「待老师确认」。',
   '产物写进对应编号目录，不要另建目录树。',
@@ -67,7 +70,7 @@ export function apiConfig(config = {}) {
   }
 }
 
-function toolSpecs(api) {
+export function toolSpecs(api) {
   const tools = [
     {
       type: 'function',
@@ -84,10 +87,28 @@ function toolSpecs(api) {
       type: 'function',
       function: {
         name: 'read_file',
-        description: '读一个文本文件的内容（txt / md / json / csv 等）。PDF、音频、图片要先解析成文本。',
+        description:
+          '读一个文本文件的内容（txt / md / json / csv 等）。PDF / PPTX 课件用 read_document，图片用 read_image。',
         parameters: {
           type: 'object',
           properties: { path: { type: 'string', description: '相对课程目录的路径' } },
+          required: ['path'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_document',
+        description:
+          '把课件（PDF / PPTX）按页抽成文本读出来，一次最多几十 KB；页多用 from / to 接着读。全是图片的页会提示改用 read_image。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '相对课程目录的课件路径，例如 00_source/week-01/第1讲.pdf' },
+            from: { type: 'number', description: '从第几页开始读，默认第 1 页' },
+            to: { type: 'number', description: '读到第几页，默认读到最后' },
+          },
           required: ['path'],
         },
       },
@@ -192,6 +213,20 @@ async function doReadFile(courseDir, args) {
   }
 }
 
+/** 课件抽文本在本地做：模型只负责整理，不用自己想办法解析二进制。 */
+async function doReadDocument(courseDir, args) {
+  const target = safePath(courseDir, args.path)
+  const stat = await fsp.stat(target).catch(() => null)
+  if (!stat?.isFile()) return '失败：找不到这个课件 ' + args.path
+  try {
+    const doc = await extractDocPages(target)
+    return formatDocPages(doc.kind, relative(courseDir, target), doc.pages, args.from, args.to)
+  } catch (error) {
+    // 课件坏了、格式不认识：当成一次「读不动」的反馈交给模型，别把整轮任务掀了
+    return '失败：' + String((error && error.message) || error)
+  }
+}
+
 async function doWriteFile(courseDir, args) {
   const target = safePath(courseDir, args.path)
   await fsp.mkdir(path.dirname(target), { recursive: true })
@@ -255,9 +290,10 @@ function doRunCommand(courseDir, args, maxCommandMs, signal) {
   })
 }
 
-async function runTool(courseDir, name, args, api, signal) {
+export async function runTool(courseDir, name, args, api, signal) {
   if (name === 'list_files') return await doListFiles(courseDir, args)
   if (name === 'read_file') return await doReadFile(courseDir, args)
+  if (name === 'read_document') return await doReadDocument(courseDir, args)
   if (name === 'write_file') return await doWriteFile(courseDir, args)
   if (name === 'read_image') return await doReadImage(courseDir, args, api, signal)
   if (name === 'run_command') {

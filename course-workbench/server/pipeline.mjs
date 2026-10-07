@@ -133,6 +133,62 @@ const STAGE_TASKS = {
       '- 已有的页不要重复生成。',
     ].join('\n'),
   },
+  digest_slides: {
+    title: '整理课件知识点集锦',
+    expects: ['06_outline/课件知识点集锦.md'],
+    grows: {
+      path: '06_outline/outline.json',
+      label: '知识点条数',
+      reason: '要么课件里没有新知识点，要么模型没入库',
+    },
+    body: [
+      '这一档只手上有课件（PPT / PDF），不用等录音：先把课件里的知识点整理出来。',
+      '- 先 list_files 00_source/，列出所有 ppt、pptx、pdf；用户点了周次就只做那一周（week-NN/）。',
+      '  已经在 06_outline/课件知识点集锦.md 里整理过的课件不要重做，只补新传的。',
+      '- 逐个课件读：PDF / PPTX 用 read_document 按页抽文本，一次读不完就带 from 接着读；',
+      '  抽不到文字的页多半是图片页或扫描件：read_image 只认图片文件、读不了课件本身，',
+      '  这种页把页码记下来写成「没读到的」，认不准的地方标「[看不清]」，不要凭印象补内容。',
+      '  课件解析不要用 run_command 折腾外部工具，read_document 在本地就抽好了；',
+      '  抽出来的逐页文本顺手写 02_slides/<课件名>-pages.md（页与页之间用 <!-- 第 N 页 --> 分隔）；',
+      '  某一页抽不动就在收尾说明里写清是哪一份、哪几页没读到，不要卡住整个任务。',
+      '- 知识点写进 06_outline/outline.json（没有就先建一个），放在 id 为 SLIDE 的 unit 里，一个课件一个 section：',
+      '  {',
+      '    "course": "课程名",',
+      '    "units": [',
+      '      {',
+      '        "id": "SLIDE",',
+      '        "title": "课件知识点",',
+      '        "sections": [',
+      '          {',
+      '            "id": "SLD-01",',
+      '            "title": "课件文件名",',
+      '            "points": [',
+      '              {',
+      '                "id": "SLD-01-01",          // 稳定 ID，重跑不许换号，避开已有的 ID',
+      '                "title": "知识点名称",',
+      '                "definition": "课件上对它的定义或要点，原话优先",',
+      '                "keywords": ["关键词"],',
+      '                "level": "基础",            // 基础 / 中等 / 提高',
+      '                "sources": ["课件 00_source/week-01/讲义.pdf 第 3 页"],',
+      '                "hasSupplement": false',
+      '              }',
+      '            ]',
+      '          }',
+      '        ]',
+      '      }',
+      '    ]',
+      '  }',
+      '- sources 一定写清是哪份课件的哪一页；一条知识点只挂一页，跨页的拆开写。',
+      '- 先读已有的 outline.json：同一个知识点只补 definition、keywords、sources，不要重复成两条；',
+      '  别的 unit（课程大纲、IMG 图片整理）一个字都不要动。',
+      '- 再写人读的 06_outline/课件知识点集锦.md：一个课件一块（## 课件文件名），下面按页顺序列知识点，',
+      '  每条给 ID、名称、核心内容、页码；最后单起一节「这一批没读到的」写清哪几页没解析出来。',
+      '- 只写课件上真有的内容：课件没写的定义、数据、结论一律不补；你自己的补充单独标「我的补充」，',
+      '  不要混进知识点。课件是老师给的原文，你的活是整理，不是替老师写讲义。',
+      '- 课件文件本身不要改、不要移动、不要删；不要动 09_quiz/。',
+      '- 收尾说明：整理了几个课件、几页、几个知识点，哪些页没读到、哪些课件之前整理过跳过了。',
+    ].join('\n'),
+  },
   '03_align': {
     title: '对齐讲述与课件',
     expects: ['03_align/align.md'],
@@ -358,6 +414,12 @@ const INTRO = {
   api: '你在一个课程工作目录中工作。动手前先读 10_kb/课程资料标准.md，按它的字段标准整理。',
 }
 
+/** 走自调 API 这条路时模型手上就这几个工具，先说清楚课件怎么读，免得它去啃二进制。 */
+const API_TOOLS_HINT = [
+  '工具口径：课件（PDF / PPTX）用 read_document 按页抽文本，一次读不完就带 from 接着读；',
+  '图片用 read_image 认字；文本文件才用 read_file。read_file 硬读课件、音频、图片只会得到乱码。',
+].join('')
+
 function buildPrompt(course, stageKey, instruction, runner) {
   const task = STAGE_TASKS[stageKey]
   const term = course.term ? '（' + course.term + '）' : ''
@@ -371,6 +433,7 @@ function buildPrompt(course, stageKey, instruction, runner) {
     '',
     task ? task.body : '按用户要求处理：' + (instruction || '整理这门课的新材料'),
   ]
+  if (runner === 'api') lines.push('', API_TOOLS_HINT)
   if (instruction) {
     lines.push('', '用户附加要求：', instruction)
   }
@@ -383,6 +446,10 @@ const children = new Map()
 const aborts = new Map()
 let running = false
 let cachedConfig = null
+// 全局一次只跑一个任务：正在跑的那个也记下来，判断「同类任务是不是已经在排队」要用
+let current = null
+// 整理课件时又传了新课件：先记一笔，这一轮跑完再补一轮，别漏掉后传的文件
+const pendingDigest = new Map()
 
 /**
  * Windows 上 npm 全局命令是 .cmd，不能直接 spawn，也不能用 shell:true
@@ -536,9 +603,45 @@ export async function createJob(root, courseId, input) {
     prompt: buildPrompt(course, stageKey, instruction, runner),
   }
   await writeJson(jobPaths(root, courseId, id).meta, job)
-  queue.push({ root, courseId, id })
+  queue.push({ root, courseId, id, stage: stageKey })
   void drain()
   return job
+}
+
+const SLIDES_TASK = 'digest_slides'
+
+/** 周次 → 「只说这几周」的附加要求；给空就整理所有还没整理的课件。 */
+function digestScope(week) {
+  const weeks = (Array.isArray(week) ? week : [week]).map((value) => String(value || '').trim()).filter(Boolean)
+  if (!weeks.length) return ''
+  const folders = weeks.map((value) => `00_source/${value}/`).join('、')
+  return weeks.length === 1
+    ? `只整理 ${folders} 这一周的课件，其他周的文件不要动。`
+    : `只整理 ${folders} 这几周的课件，其他周的文件不要动。`
+}
+
+/** 排一轮「整理课件知识点集锦」。按周各排一次时直接用它，不合并。 */
+export async function queueSlideDigest(root, courseId, week = '') {
+  return await createJob(root, courseId, { stage: SLIDES_TASK, instruction: digestScope(week) })
+}
+
+/**
+ * 传了课件（PPT / PDF）就顺手排一次「整理课件知识点集锦」。
+ * 已经在跑或排队的同类任务不重复排，只记一笔，等这一轮跑完再补一轮——
+ * 这样一批文件只花一次任务，跑的过程中新传的课件也不会被漏掉。
+ */
+export async function requestSlideDigest(root, courseId, week = '') {
+  const items = current ? [current, ...queue] : [...queue]
+  const busy = items.some((item) => item.root === root && item.courseId === courseId && item.stage === SLIDES_TASK)
+  if (busy) {
+    const key = root + '|' + courseId
+    const weeks = pendingDigest.get(key) || new Set()
+    const value = String(week || '').trim()
+    if (value) weeks.add(value)
+    pendingDigest.set(key, weeks)
+    return null
+  }
+  return await queueSlideDigest(root, courseId, week)
 }
 
 async function drain() {
@@ -546,6 +649,7 @@ async function drain() {
   const next = queue.shift()
   if (!next) return
   running = true
+  current = next
   try {
     await runJob(next.root, next.courseId, next.id)
   } catch (error) {
@@ -556,7 +660,26 @@ async function drain() {
     })
   } finally {
     running = false
+    current = null
+    await followupDigest(next)
     void drain()
+  }
+}
+
+/** 整理课件时攒下的周次，这一轮跑完补一次；补完就清掉，不会自己套娃转不停。 */
+async function followupDigest(finished) {
+  if (finished.stage !== SLIDES_TASK) return
+  const key = finished.root + '|' + finished.courseId
+  const weeks = pendingDigest.get(key)
+  if (!weeks) return
+  pendingDigest.delete(key)
+  try {
+    await createJob(finished.root, finished.courseId, {
+      stage: SLIDES_TASK,
+      instruction: digestScope([...weeks]),
+    })
+  } catch {
+    // 课程被删了之类，补不上就算了
   }
 }
 

@@ -42,6 +42,7 @@ export default function MoodleImport({ course, onImported }: Props) {
   const [preview, setPreview] = useState<MoodleCourse | null>(null)
   const [picked, setPicked] = useState<number[]>([])
   const [withSchedule, setWithSchedule] = useState(true)
+  const [withDigest, setWithDigest] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
@@ -100,11 +101,20 @@ export default function MoodleImport({ course, onImported }: Props) {
         courseId: preview.id,
         sections: picked,
         schedule: withSchedule,
+        digest: withDigest,
       })
       const parts = [`拉了 ${result.files.length} 个文件到 00_source/`]
       if (result.skipped.length) parts.push(`跳过 ${result.skipped.length} 个（同名已存在或下载失败）`)
       if (result.milestones.length) parts.push(`时间轴补了 ${result.milestones.length} 个上课节点`)
-      setNote(parts.join('，') + '。录音还是自己放进对应周次，再跑盘点。')
+      if (result.digests?.length) parts.push(`按周排了 ${result.digests.length} 轮课件知识点整理`)
+      const weeks = (result.missingRecordings || []).map(
+        (week) => `week-${String(week).padStart(2, '0')}`,
+      )
+      if (weeks.length) parts.push(`还缺录音的周：${weeks.join('、')}`)
+      setNote(
+        parts.join('，') +
+          '。课件马上就开始整理知识点集锦了；录音传进对应周次才能做完整上课分析（转写 → 对齐 → 纠错 → 笔记）。',
+      )
       onImported()
     } catch (err) {
       setError(errorMessage(err))
@@ -247,6 +257,21 @@ export default function MoodleImport({ course, onImported }: Props) {
                 <span>
                   读到的上课日期顺手写进时间轴
                   <span className="muted"> · 同一天同一节不会重复加，之后可以在时间轴页改</span>
+                </span>
+              </label>
+
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={withDigest}
+                  onChange={() => setWithDigest((value) => !value)}
+                />
+                <span>
+                  导完马上按周整理知识点集锦
+                  <span className="muted">
+                    {' '}
+                    · 一周一个任务，马上开始花模型；不想现在跑就取消勾选，之后在材料页手动点
+                  </span>
                 </span>
               </label>
 

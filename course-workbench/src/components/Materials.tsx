@@ -15,6 +15,10 @@ const STAGE_OPTIONS: { key: StageKey; label: string; hint: string }[] = [
 
 const UNFILED = '__unfiled__'
 
+/** 课件和录音分开数：有课件就能先出知识点集锦，完整上课分析要等录音。 */
+const SLIDE_RE = /\.(pptx?|ppt|pdf)$/i
+const AUDIO_RE = /\.(m4a|mp3|wav|mp4|aac|amr|m4v|mov|ogg|flac|wma)$/i
+
 interface WeekRow {
   week: number
   topic: string
@@ -34,6 +38,7 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
   const [selected, setSelected] = useState<string>('')
   const [dragging, setDragging] = useState(false)
   const [uploads, setUploads] = useState<{ name: string; state: string }[]>([])
+  const [notice, setNotice] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { data: fileData, error, reload: load } = useLoader(
@@ -109,10 +114,26 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
     return map
   }, [files])
 
+  /** 每周的材料构成：课件、录音、其他。 */
+  const kinds = useMemo(() => {
+    const map = new Map<string, { slides: number; audio: number; other: number }>()
+    for (const [folder, list] of grouped) {
+      const entry = { slides: 0, audio: 0, other: 0 }
+      for (const file of list) {
+        if (SLIDE_RE.test(file.name)) entry.slides += 1
+        else if (AUDIO_RE.test(file.name)) entry.audio += 1
+        else entry.other += 1
+      }
+      map.set(folder, entry)
+    }
+    return map
+  }, [grouped])
+
   const send = async (list: FileList | File[]) => {
     const items = Array.from(list)
     if (!items.length) return
     const rel = stage === '00_source' && selected !== UNFILED ? selected : ''
+    let queued = 0
     setUploads(items.map((file) => ({ name: file.name, state: '等待上传' })))
     for (let index = 0; index < items.length; index += 1) {
       const file = items[index]
@@ -120,9 +141,14 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
         current.map((item, i) => (i === index ? { ...item, state: '上传中…' } : item)),
       )
       try {
-        await api.upload(course.id, stage, file, rel)
+        const result = await api.upload(course.id, stage, file, rel)
+        if (result.digest) queued += 1
         setUploads((current) =>
-          current.map((item, i) => (i === index ? { ...item, state: '已入库' } : item)),
+          current.map((item, i) =>
+            i === index
+              ? { ...item, state: result.digest ? '已入库，已自动开始整理知识点' : '已入库' }
+              : item,
+          ),
         )
       } catch (err) {
           const message = errorMessage(err)
@@ -133,6 +159,9 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
     }
     await load()
     onChanged()
+    if (queued) {
+      setNotice(`课件已入库，工作台自动排上 ${queued} 轮「整理课件知识点集锦」，去「任务」页看进度。`)
+    }
   }
 
   const active = STAGE_OPTIONS.find((option) => option.key === stage) || STAGE_OPTIONS[0]
@@ -144,6 +173,40 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
         ? `第 ${currentWeek.week} 周${currentWeek.date ? ` · ${currentWeek.date}` : ''}`
         : '未归周'
   const currentFiles = grouped.get(stage === '10_kb' ? UNFILED : selected) || []
+  const weekKind = kinds.get(selected) || { slides: 0, audio: 0, other: 0 }
+  const needsRecording = stage === '00_source' && weekKind.slides > 0 && weekKind.audio === 0
+  const hasRecording = stage === '00_source' && weekKind.audio > 0
+  const weekLabel = currentWeek ? `第 ${currentWeek.week} 周` : '未归周'
+
+  /** 课件这一档不用等录音：马上整理成知识点集锦。 */
+  const startDigest = async () => {
+    try {
+      setNotice('')
+      const week = selected && selected !== UNFILED ? selected : ''
+      const result = await api.digestSlides(course.id, week)
+      setNotice(result.job ? '已排上「整理课件知识点集锦」，去「任务」页看进度。' : result.note)
+    } catch (err) {
+      setNotice('排不上：' + errorMessage(err))
+    }
+  }
+
+  /** 完整上课分析要录音：转写 → 对齐 → 纠错 → 笔记。 */
+  const startFull = async () => {
+    try {
+      setNotice('')
+      const scoped = selected && selected !== UNFILED ? selected : ''
+      await api.createJob(course.id, {
+        stage: 'full',
+        title: `完整上课分析 · ${weekLabel}`,
+        instruction: scoped
+          ? `这一轮只做 00_source/${scoped}/ 这一周的完整分析：转写录音、对齐课件、纠错、写笔记，其他周的材料不要动。`
+          : '',
+      })
+      setNotice('已排上「完整上课分析」，去「任务」页看进度。')
+    } catch (err) {
+      setNotice('排不上：' + errorMessage(err))
+    }
+  }
 
   return (
     <Panel
@@ -186,6 +249,12 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
               <div className="week-chips">
                 {weeks.map((row) => {
                   const count = (grouped.get(row.folder) || []).length
+                  const kind = kinds.get(row.folder)
+                  const parts: string[] = []
+                  if (kind?.slides) parts.push(`${kind.slides} 课件`)
+                  if (kind?.audio) parts.push(`${kind.audio} 录音`)
+                  else if (kind?.slides) parts.push('缺录音')
+                  if (kind?.other) parts.push(`${kind.other} 个文件`)
                   return (
                     <button
                       key={row.folder}
@@ -200,7 +269,7 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
                       <span className="week-chip__no">第 {row.week} 周</span>
                       <span className="week-chip__date mono">{row.date || '待排课'}</span>
                       <span className="week-chip__count">
-                        {row.cancelled ? '已取消' : count > 0 ? `${count} 个文件` : '空'}
+                        {row.cancelled ? '已取消' : parts.join(' · ') || '空'}
                       </span>
                     </button>
                   )
@@ -221,6 +290,31 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {stage === '00_source' && (currentWeek || selected === UNFILED) && (
+        <div style={{ marginTop: 14 }}>
+          <p className={needsRecording ? 'notice notice--due' : 'notice'} style={{ margin: 0 }}>
+            {needsRecording
+              ? `${weekLabel}有课件、没录音：课件现在就能整理成知识点集锦；录音传进来才能做完整上课分析（转写 → 对齐 → 纠错 → 笔记）。`
+              : hasRecording
+                ? `${weekLabel}录音已就位：可以跑完整上课分析；只想先看课件的话，也能单独整理知识点集锦。`
+                : `${weekLabel}还没有课件。`}
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginTop: 8 }}>
+            {weekKind.slides > 0 && (
+              <button className="btn" type="button" onClick={() => void startDigest()}>
+                整理课件知识点
+              </button>
+            )}
+            {hasRecording && (
+              <button className="btn" type="button" onClick={() => void startFull()}>
+                跑完整上课分析
+              </button>
+            )}
+            {notice && <span className="mono">{notice}</span>}
+          </div>
         </div>
       )}
 

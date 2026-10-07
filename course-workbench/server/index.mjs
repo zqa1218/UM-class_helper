@@ -39,7 +39,9 @@ import {
   getJob,
   getJobLog,
   listJobs,
+  queueSlideDigest,
   recoverJobs,
+  requestSlideDigest,
   runnerInfo,
   stageCatalog,
 } from './pipeline.mjs'
@@ -171,7 +173,11 @@ async function handleApi(req, res, url) {
           withSchedule: body.schedule !== false,
         })
         await touchCourse(COURSE_ROOT, String(body.id || ''))
-        return sendJson(res, 200, result)
+        const digests =
+          body.digest === false
+            ? []
+            : await autoDigestWeeks(String(body.id || ''), [...new Set(result.files.map((file) => file.week))])
+        return sendJson(res, 200, { ...result, digests })
       } catch (error) {
         return sendError(res, 400, String(error?.message || error))
       }
@@ -308,6 +314,7 @@ async function handleApi(req, res, url) {
       })
       const stat = await fsp.stat(target)
       await touchCourse(COURSE_ROOT, id)
+      const digest = await autoDigestSlides(id, stage, rel, name)
       return sendJson(res, 201, {
         file: {
           path: [stage, rel, name].filter(Boolean).join('/'),
@@ -315,7 +322,21 @@ async function handleApi(req, res, url) {
           size: stat.size,
           sizeLabel: formatBytes(stat.size),
         },
+        digest,
       })
+    }
+
+    if (rest[0] === 'digest-slides' && method === 'POST') {
+      const body = await readJsonBody(req).catch(() => ({}))
+      try {
+        const job = await requestSlideDigest(COURSE_ROOT, id, body.week || '')
+        return sendJson(res, job ? 201 : 200, {
+          job,
+          note: job ? '' : '已经有一轮在整理了，跑完会自动补上这一周的课件',
+        })
+      } catch (error) {
+        return sendError(res, 400, String(error?.message || error))
+      }
     }
 
     if (rest[0] === 'file' && method === 'DELETE') {
@@ -428,6 +449,73 @@ async function handleApi(req, res, url) {
  * 把一门 Moodle 课程的课件拉进课程目录的 00_source/，按周次归档成 week-NN/，
  * 顺手把小节里读到的日期补成课程节点。录音仍然由用户自己放进对应周。
  */
+const SLIDE_EXTS = new Set(['ppt', 'pptx', 'pdf'])
+const AUDIO_EXTS = new Set(['m4a', 'mp3', 'wav', 'mp4', 'aac', 'amr', 'm4v', 'mov', 'ogg', 'flac', 'wma'])
+
+const extOf = (name) => path.extname(String(name || '')).toLowerCase().replace(/^\./, '')
+
+/**
+ * 传上来的如果是课件（PPT / PDF），马上排一次「整理课件知识点集锦」，不用等录音。
+ * 录音不自动跑：完整上课分析费模型也费时间，得用户自己点。
+ * 想整个关掉就在配置里写 "autoDigestSlides": false。
+ */
+async function autoDigestSlides(courseId, stage, rel, name) {
+  if (config.autoDigestSlides === false) return null
+  if (stage !== '00_source' || !SLIDE_EXTS.has(extOf(name))) return null
+  try {
+    const job = await requestSlideDigest(COURSE_ROOT, courseId, weekFolder(rel))
+    return job ? { id: job.id, title: job.title } : null
+  } catch {
+    return null // 自动整理排不上不该让上传失败
+  }
+}
+
+/** rel 可能是 week-01，也可能是 week-01/子目录；取第一段，不是周次目录就返回空。 */
+function weekFolder(rel) {
+  const first = String(rel || '').split('/').filter(Boolean)[0] || ''
+  return /^week-\d+$/i.test(first) ? first : ''
+}
+
+/** 刚导入的课件：一周排一次整理。一周一个任务，单个任务不会长到跑不完。 */
+async function autoDigestWeeks(courseId, weeks) {
+  if (config.autoDigestSlides === false) return []
+  const jobs = []
+  for (const week of weeks.filter((value) => Number.isFinite(value)).sort((a, b) => a - b)) {
+    try {
+      const job = await queueSlideDigest(COURSE_ROOT, courseId, `week-${String(week).padStart(2, '0')}`)
+      jobs.push({ week, id: job.id })
+    } catch {
+      // 排不上就算了，界面上还能手动点「整理课件知识点」
+    }
+  }
+  return jobs
+}
+
+/** 扫一眼 00_source/：哪些周有课件却没录音，等着补录音做完整分析。 */
+async function weeksMissingRecording(sourceDir) {
+  let entries = []
+  try {
+    entries = await fsp.readdir(sourceDir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const missing = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^week-\d+$/i.test(entry.name)) continue
+    const files = await fsp.readdir(path.join(sourceDir, entry.name), { withFileTypes: true }).catch(() => [])
+    let slides = 0
+    let audio = 0
+    for (const file of files) {
+      if (!file.isFile()) continue
+      const ext = extOf(file.name)
+      if (SLIDE_EXTS.has(ext)) slides += 1
+      if (AUDIO_EXTS.has(ext)) audio += 1
+    }
+    if (slides > 0 && !audio) missing.push(Number(entry.name.slice('week-'.length)))
+  }
+  return missing.sort((a, b) => a - b)
+}
+
 async function importMoodleCourse(root, cfg, { id, courseId, sections, withSchedule }) {
   if (!isCourseId(id)) throw new Error('工作台里的课程 id 不对')
   const course = await getCourse(root, id)
@@ -443,7 +531,8 @@ async function importMoodleCourse(root, cfg, { id, courseId, sections, withSched
     only: sections.map(String),
   })
   const milestones = withSchedule ? await mergeMoodleSchedule(root, id, moodle) : []
-  await writeImportManifest(sourceDir, moodle, result)
+  const missingRecordings = await weeksMissingRecording(sourceDir)
+  await writeImportManifest(sourceDir, moodle, result, missingRecordings)
 
   return {
     moodle: {
@@ -455,6 +544,7 @@ async function importMoodleCourse(root, cfg, { id, courseId, sections, withSched
     files: result.files,
     skipped: result.skipped,
     milestones,
+    missingRecordings,
   }
 }
 
@@ -482,7 +572,7 @@ async function mergeMoodleSchedule(root, id, moodle) {
   return added
 }
 
-async function writeImportManifest(dir, moodle, result) {
+async function writeImportManifest(dir, moodle, result, missingRecordings = []) {
   const lines = [
     `# Moodle 课件导入 · ${moodle.fullname}`,
     '',
@@ -501,7 +591,19 @@ async function writeImportManifest(dir, moodle, result) {
     lines.push('', '## 没拉下来的', '')
     for (const item of result.skipped) lines.push(`- ${item.name}：${item.reason}`)
   }
-  lines.push('', '录音还是要自己传：把每节课的录音放进对应的 week-NN/，再跑「盘点新导入的材料」。')
+  if (missingRecordings.length) {
+    lines.push(
+      '',
+      '## 还缺录音的周',
+      '',
+      missingRecordings.map((week) => `week-${String(week).padStart(2, '0')}`).join('、'),
+      '',
+      '录音还是要自己传：把每节课的录音放进对应 week-NN/，再跑「盘点新导入的材料」。',
+      '录音到位就能跑完整上课分析（转写 → 对齐 → 纠错 → 笔记）；只有课件的周，先看「整理课件知识点集锦」。',
+    )
+  } else {
+    lines.push('', '录音还是要自己传：把每节课的录音放进对应的 week-NN/，再跑「盘点新导入的材料」。')
+  }
   await fsp.writeFile(path.join(dir, 'moodle-import.md'), lines.join('\n') + '\n', 'utf8')
 }
 

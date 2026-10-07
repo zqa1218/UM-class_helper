@@ -17,6 +17,7 @@
     "session": "",
     "token": ""
   },
+  "autoDigestSlides": true,
   "codexCommand": "codex",
   "codexSandbox": "workspace-write",
   "codexExtraArgs": []

@@ -10,6 +10,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { strToU8, zipSync } from 'fflate'
+
+import { runTool, toolSpecs } from '../server/agent.mjs'
 import { buildCalendar, parseIcs } from '../server/calendar.mjs'
 import { parseCourseHtml, parseWhen, weekOf } from '../server/moodle.mjs'
 import { missingArtifacts } from '../server/pipeline.mjs'
@@ -215,6 +218,33 @@ const OUTLINE_DOC = {
 let seenRounds = 0
 let seenImage = false
 let visionCalls = 0
+// 课件整理出来的知识点，字段与真跑时约定的结构一致
+const SLIDE_OUTLINE = {
+  course: '冒烟测试课',
+  units: [
+    {
+      id: 'SLIDE',
+      title: '课件知识点',
+      sections: [
+        {
+          id: 'SLD-01',
+          title: '讲义.pdf',
+          points: [
+            {
+              id: 'SLD-01-01',
+              title: '神经元',
+              definition: '课件第 1 页给的定义',
+              keywords: ['神经元'],
+              level: '基础',
+              sources: ['课件 00_source/week-01/讲义.pdf 第 1 页'],
+              hasSupplement: false,
+            },
+          ],
+        },
+      ],
+    },
+  ],
+}
 const fakeApi = http.createServer((req, res) => {
   let body = ''
   req.on('data', (chunk) => {
@@ -260,6 +290,42 @@ const fakeApi = http.createServer((req, res) => {
           },
         ],
       })
+      if (prompt.includes('整理课件知识点集锦')) {
+        let message
+        if (!toolTexts.length) {
+          message = call('list_files', { path: '00_source' })
+        } else if (toolTexts.some((text) => text.includes('已写入 06_outline/课件知识点集锦.md'))) {
+          message = { role: 'assistant', content: '整理完 1 个课件、1 个知识点。' }
+        } else if (lastTool.includes('week-')) {
+          // 抽页 + 入库 + 人读集锦，三份一起写
+          const write = (id, path, content) => ({
+            id,
+            type: 'function',
+            function: { name: 'write_file', arguments: JSON.stringify({ path, content }) },
+          })
+          message = {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              write('call-digest-pages', '02_slides/讲义-pages.md', '# 讲义\n\n第 1 页：神经元是基本单位。\n'),
+              write(
+                'call-digest-note',
+                '06_outline/课件知识点集锦.md',
+                '# 课件知识点集锦\n\n## 讲义.pdf\n- SLD-01-01 神经元（第 1 页）\n',
+              ),
+              write('call-digest-outline', '06_outline/outline.json', JSON.stringify(SLIDE_OUTLINE, null, 2)),
+            ],
+          }
+        } else {
+          message = { role: 'assistant', content: '00_source/ 里没有课件。' }
+        }
+        return reply(200, {
+          id: 'smoke-digest',
+          object: 'chat.completion',
+          model: payload.model,
+          choices: [{ index: 0, message, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }],
+        })
+      }
       if (prompt.includes('从图片整理题目集')) {
         let message
         if (!toolTexts.length) {
@@ -452,6 +518,66 @@ const fakeMoodle = http.createServer((req, res) => {
   return html(404, '<title>没有这个页面</title>')
 })
 await new Promise((resolve) => fakeMoodle.listen(MOODLE_PORT, '127.0.0.1', resolve))
+
+// ---- 课件抽文本：模型能读 PDF / PPTX 全靠这一步，不联网 ----
+const TINY_PDF = (() => {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    '<< /Length 74 >>\nstream\nBT /F1 24 Tf 72 700 Td (Neuron basics page one) Tj ET\nendstream',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets = []
+  objects.forEach((body, index) => {
+    offsets.push(pdf.length)
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`
+  })
+  const xref = pdf.length
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`
+  return pdf + `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+})()
+
+const docDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'course-workbench-docs-'))
+await fsp.mkdir(path.join(docDir, 'week-01'), { recursive: true })
+await fsp.writeFile(path.join(docDir, 'week-01/讲义.pdf'), TINY_PDF, 'latin1')
+await fsp.writeFile(
+  path.join(docDir, 'week-01/讲义.pptx'),
+  zipSync({
+    'ppt/slides/slide1.xml': strToU8('<p:sld><a:p><a:t>第一张 神经元</a:t></a:p><a:p><a:t>胶质细胞 &amp; 作用</a:t></a:p></p:sld>'),
+    'ppt/slides/slide2.xml': strToU8('<p:sld><a:p><a:r><a:t>第二张：突触传递</a:t></a:r></a:p></p:sld>'),
+    'ppt/slides/slide3.xml': strToU8('<p:sld><a:p><a:r><a:t>   </a:t></a:r></a:p></p:sld>'),
+    '[Content_Types].xml': strToU8('<Types/>'),
+  }),
+)
+const noTools = { vision: false, allowCommands: false }
+// .ppt 老格式存成真文件，验的是扩展名这一关，不是「文件不存在」
+await fsp.writeFile(path.join(docDir, 'week-01/老课件.ppt'), Buffer.from('not a real ppt'))
+check('工具表里有 read_document', toolSpecs(noTools).some((tool) => tool.function.name === 'read_document'))
+const pdfText = await runTool(docDir, 'read_document', { path: 'week-01/讲义.pdf' }, noTools)
+check('read_document 抽得出 PDF 文字', pdfText.includes('Neuron basics page one'), pdfText.slice(0, 120))
+const pptxText = await runTool(docDir, 'read_document', { path: 'week-01/讲义.pptx' }, noTools)
+check(
+  'read_document 按页抽 PPTX',
+  pptxText.includes('第 1 张（slide1）') && pptxText.includes('突触传递'),
+  pptxText.slice(0, 160),
+)
+check(
+  'read_document 能只读某一页',
+  (await runTool(docDir, 'read_document', { path: 'week-01/讲义.pptx', from: 2, to: 2 }, noTools)).includes('第 2-2 张'),
+)
+check('抽不到文字的页会说清是图片页', pptxText.includes('抽不到文字'), pptxText.slice(-140))
+check(
+  'read_document 只认 pdf / pptx',
+  (await runTool(docDir, 'read_document', { path: 'week-01/老课件.ppt' }, noTools)).includes('只认 pdf / pptx'),
+)
+check(
+  'read_document 找不到文件会说明白',
+  (await runTool(docDir, 'read_document', { path: 'week-01/没有这个.pdf' }, noTools)).includes('找不到'),
+)
+await fsp.rm(docDir, { recursive: true, force: true })
 
 // ---- 起服务 ----
 const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'course-workbench-smoke-'))
@@ -952,7 +1078,18 @@ try {
   const manifest = await fsp.readFile(path.join(dir, '00_source/moodle-import.md'), 'utf8')
   check('导入清单写出来了', manifest.includes('Moodle 课件导入') && manifest.includes('第1讲-绪论.pdf'))
   check('清单里留了「录音自己传」的话', manifest.includes('录音还是要自己传'))
+  check('清单里点名还缺录音的周', manifest.includes('week-01') && manifest.includes('week-02'), manifest)
   check('导入报告补了 1 个上课节点', imported.body?.milestones?.length === 1, JSON.stringify(imported.body?.milestones))
+  check(
+    '导入报告哪些周还缺录音',
+    JSON.stringify(imported.body?.missingRecordings) === '[1,2]',
+    JSON.stringify(imported.body?.missingRecordings),
+  )
+  check(
+    '导入后按周各排一轮整理',
+    (imported.body?.digests || []).length === 2,
+    JSON.stringify(imported.body?.digests),
+  )
   const afterImport = await json(`/api/courses/${id}`)
   check(
     '读到的日期写进时间轴',
@@ -965,7 +1102,7 @@ try {
   const reimport = await json('/api/moodle/import', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ id, courseId: '44187', sections: [1, 2] }),
+    body: JSON.stringify({ id, courseId: '44187', sections: [1, 2], digest: false }),
   })
   check(
     '重跑不覆盖同名文件',
@@ -980,6 +1117,63 @@ try {
     body: JSON.stringify({ id: 'nope', courseId: '44187' }),
   })
   check('课程 id 不对时报 400', partial.status === 400, String(partial.status))
+
+  // ---- 上传课件就自动整理知识点：不用等录音 ----
+  const slide = await request(
+    `/api/courses/${id}/upload?stage=00_source&rel=week-01&name=${encodeURIComponent('第1讲.pdf')}`,
+    { method: 'POST', body: MOODLE_PDF },
+  )
+  const slideBody = await slide.json().catch(() => null)
+  check('课件上传成功', slide.status === 201, String(slide.status))
+  check('课件上传后自动排上整理任务', !!slideBody?.digest?.id, JSON.stringify(slideBody))
+  check(
+    '自动排的是「整理课件知识点集锦」',
+    String(slideBody?.digest?.title || '').includes('课件知识点集锦'),
+    String(slideBody?.digest?.title),
+  )
+  const digestJob = await waitForJob(slideBody?.digest?.id)
+  check('自动整理跑完', digestJob?.job?.status === 'done', String(digestJob?.job?.error))
+  check(
+    '任务只说了这一周',
+    String(digestJob?.job?.instruction || '').includes('00_source/week-01/'),
+    String(digestJob?.job?.instruction),
+  )
+  const digestNote = await fsp
+    .readFile(path.join(dir, '06_outline/课件知识点集锦.md'), 'utf8')
+    .catch(() => '')
+  check('课件知识点集锦落盘', digestNote.includes('SLD-01-01'), digestNote.slice(0, 80))
+  check('逐页文本也留下了', !!(await fsp.stat(path.join(dir, '02_slides/讲义-pages.md')).catch(() => null)))
+  const outlineAfterDigest = await readOutline()
+  check(
+    '知识点进了 outline.json 的 SLIDE 单元',
+    allPoints(outlineAfterDigest).some((point) => point.id === 'SLD-01-01'),
+    JSON.stringify(allPoints(outlineAfterDigest).map((point) => point.id)),
+  )
+
+  const audio = await request(
+    `/api/courses/${id}/upload?stage=00_source&rel=week-01&name=lecture-01.m4a`,
+    { method: 'POST', body: Buffer.from('fake audio') },
+  )
+  const audioBody = await audio.json().catch(() => null)
+  check('录音上传成功', audio.status === 201, String(audio.status))
+  check('录音不自动排任务（完整分析要人手点）', !audioBody?.digest, JSON.stringify(audioBody?.digest))
+
+  const manual = await json(`/api/courses/${id}/digest-slides`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ week: 'week-01' }),
+  })
+  check('手动排整理返回 201', manual.status === 201, String(manual.status))
+  const manualDone = await waitForJob(manual.body?.job?.id)
+  check('手动整理也能跑完', manualDone?.job?.status === 'done', String(manualDone?.job?.error))
+
+  const unknown = await json(`/api/courses/${id}/digest-slides`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ week: '' }),
+  })
+  check('不指定周次就整理全部', unknown.status === 201, String(unknown.status))
+  await waitForJob(unknown.body?.job?.id)
 } finally {
   server.kill()
   fakeApi.close()

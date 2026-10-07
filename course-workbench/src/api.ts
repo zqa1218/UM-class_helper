@@ -109,8 +109,23 @@ export const api = {
     if (!response.ok) {
       throw new Error(data?.error ? String(data.error) : `上传失败（${response.status}）`)
     }
-    return data as { file: FileEntry }
+    return data as {
+      file: FileEntry
+      /** 传的是课件时，工作台已经自动排上的「整理课件知识点集锦」任务。 */
+      digest: { id: string; title: string } | null
+    }
   },
+
+  /** 手动排一次「整理课件知识点集锦」；week 传 week-01 就只做那一周，空串就是全部。 */
+  digestSlides: (id: string, week = '') =>
+    request<{ job: Job | null; note: string }>(
+      `/api/courses/${encodeURIComponent(id)}/digest-slides`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ week }),
+      },
+    ),
 
   listJobs: (id: string) =>
     request<{ jobs: Job[] }>(`/api/courses/${encodeURIComponent(id)}/jobs`),
@@ -209,6 +224,8 @@ export const api = {
     sections?: number[]
     /** 是否把读到的日期写进时间轴，默认写 */
     schedule?: boolean
+    /** 导完是否按周自动排「整理课件知识点集锦」，默认排 */
+    digest?: boolean
   }) =>
     request<MoodleImportResult>('/api/moodle/import', {
       method: 'POST',
