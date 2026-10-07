@@ -250,3 +250,69 @@ export interface TextbookEntry {
   files: string[]
   chapters: { id?: string; title?: string; file?: string; pages?: string; weeks?: number[] }[]
 }
+
+/** /api/moodle/status 返回的连接状态；凭据本身不外传。 */
+export interface MoodleStatus {
+  baseUrl: string
+  include: string[]
+  /** 有 token 走接口，否则用登录后的 cookie；都没配就是空串。 */
+  mode: '' | 'token' | 'cookie'
+  configured: boolean
+}
+
+export interface MoodleFile {
+  name: string
+  size: number
+}
+
+export interface MoodleModule {
+  id: number
+  name: string
+  modname: string
+  files: MoodleFile[]
+}
+
+/** Moodle 上的一个小节；date / time 是从小节名或摘要里读出来的上课时间。 */
+export interface MoodleSection {
+  index: number
+  name: string
+  text: string
+  date: string
+  time: string
+  modules: MoodleModule[]
+}
+
+export interface MoodleEvent {
+  name: string
+  date: string
+  time: string
+}
+
+export interface MoodleCourse {
+  id: string
+  fullname: string
+  shortname: string
+  startDate: string
+  source: 'token' | 'cookie'
+  sections: MoodleSection[]
+  events: MoodleEvent[]
+}
+
+export interface MoodleImportFile {
+  name: string
+  /** 相对课程目录的路径，例如 00_source/week-03/lecture.pdf */
+  path: string
+  size: number
+  week: number
+  section: string
+  module: string
+  date: string
+}
+
+export interface MoodleImportResult {
+  moodle: { id: string; fullname: string; source: string; sections: number }
+  files: MoodleImportFile[]
+  skipped: { name: string; reason: string }[]
+  /** 顺手补进时间轴的上课节点（同日期同标题的不会重复加）。 */
+  milestones: ExtractedScheduleItem[]
+}

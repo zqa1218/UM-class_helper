@@ -4,6 +4,9 @@ import type {
   ExtractedCourse,
   FileEntry,
   Job,
+  MoodleCourse,
+  MoodleImportResult,
+  MoodleStatus,
   Outline,
   QuizItem,
   StageState,
@@ -184,4 +187,32 @@ export const api = {
       `/api/courses/${encodeURIComponent(id)}/textbooks/scaffold`,
       { method: 'POST' },
     ),
+
+  moodleStatus: () => request<{ moodle: MoodleStatus }>('/api/moodle/status'),
+
+  moodleCheck: () =>
+    request<{ result: { ok: boolean; mode: string; site: string; user: string } }>(
+      '/api/moodle/check',
+      { method: 'POST' },
+    ),
+
+  /** 读一门 Moodle 课的目录，用来预览小节和课件，还不下载。 */
+  moodleCourse: (courseId: string) =>
+    request<{ course: MoodleCourse }>(
+      `/api/moodle/course?courseId=${encodeURIComponent(courseId)}`,
+    ),
+
+  moodleImport: (payload: {
+    id: string
+    courseId: string
+    /** 只导这几节；不传就导全部 */
+    sections?: number[]
+    /** 是否把读到的日期写进时间轴，默认写 */
+    schedule?: boolean
+  }) =>
+    request<MoodleImportResult>('/api/moodle/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 }

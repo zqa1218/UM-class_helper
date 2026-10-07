@@ -76,9 +76,11 @@ _jobs/               任务日志
 - `api.visionBaseUrl` / `api.visionModel` — 识图单独走哪个接口和模型，不填就跟 `baseUrl` / `model`
 - `api.visionApiKeyEnv` / `api.visionApiKey` — 识图用的 key，不填就用主接口那把
 - `codexCommand` / `codexSandbox` / `codexExtraArgs` — 只有 `runner` 是 `codex` 时才用
+- `moodle` — 从 UM Moodle 拉课件用的登录凭据（`baseUrl` / `session` / `token` / `include`），见「Moodle 课件怎么自动拉」
 
 环境变量 `PORT`、`COURSE_ROOT` 可以直接覆盖端口与课程目录，冒烟测试用的就是这两个。
 `WORKBENCH_API_BASE_URL`、`WORKBENCH_API_MODEL`、`WORKBENCH_API_KEY` 临时覆盖 api 段，方便换模型试跑。
+`WORKBENCH_MOODLE_BASE_URL`、`WORKBENCH_MOODLE_SESSION`、`WORKBENCH_MOODLE_TOKEN` 临时覆盖 moodle 段。
 
 ### 两条执行路径
 
@@ -213,3 +215,31 @@ npm run calendar   # 也可以命令行刷新，结果写进 calendars/
 
 录音和课件按周次放进 `00_source/week-01/`、`week-02/`……文件名里带周次的会自动归位，
 认不出的单列在 manifest 的「未归周」，不会乱猜。
+
+## Moodle 课件怎么自动拉
+
+课件不用一节一节点下载。填一次课程 id，工作台自己把 PPT / PDF 按周拉进 `00_source/week-NN/`，
+人只管补录音：
+
+1. 「材料」页切到「本次课材料」，展开「从 Moodle 导入」。
+2. 填课程 id —— 就是网址里 `view.php?id=` 后面那串数字（例如 `44187`），整条网址粘进去也行。
+3. 点「读取目录」先看一眼：课程名、每节有几个课件、每节的日期时间都对不对。
+4. 勾要哪几节（默认勾上有课件的），点「导入勾选的 N 个课件」。
+   产物是 `00_source/week-NN/` 下的课件，加一份 `00_source/moodle-import.md` 清单。
+5. 课件是机器拉的，声音得你给——录音放进对应的 `week-NN/`，再跑「盘点新导入的材料」。
+
+顺手生成上课时间：小节名或摘要里带日期时间的（`2026-09-01 14:00`、`9月1日`、`Mar 7` 这类），
+导入时会按「日期 + 小节名」补成时间轴的讲课节点，同一天同一节不会重复加。读不出来的不猜，
+留给你在时间轴页补；「Week 1-2」「0 / 6」这种数字串不会被当成日期。有 Moodle token 时
+还会读课程日历上的活动时间。
+
+登录凭据（工作台不存密码，也不去下教材）：
+
+- `moodle.session` — 浏览器登录 `ummoodle.um.edu.mo` 后按 F12 → Application → Cookies，复制
+  `MoodleSession` 的值填进来。UM 是全 SSO（ADFS），没有本地密码登录，一般用这一条。
+- `moodle.token` — 有 Moodle Web service / 手机端 token 的话填这里，走 JSON 接口更稳。
+- `moodle.include` — 只拉这些后缀，默认 `ppt` / `pptx` / `pdf`；要 Word 就加 `doc` / `docx`。
+- `moodle.baseUrl` — 默认 `https://ummoodle.um.edu.mo`，换学校改这里。
+
+凭据只从配置或环境变量读，不回传给前端，也不写进课程目录。cookie 会过期，过期后接口会明说
+「MoodleSession 过期或不对」，重新复制一次即可。同名文件不覆盖，重跑一遍只补新增的课件。

@@ -24,6 +24,14 @@ import {
   updateCourse,
 } from './courses.mjs'
 import { listCalendars, refreshCalendar } from './calendar.mjs'
+import {
+  fetchMoodleCourse,
+  importMoodleFiles,
+  moodleCheck,
+  moodleConfig,
+  moodleStatus,
+  publicMoodleCourse,
+} from './moodle.mjs'
 import { buildTextbookScaffold, listTextbooks } from './textbooks.mjs'
 import {
   cancelJob,
@@ -130,6 +138,45 @@ async function handleApi(req, res, url) {
 
   if (segments[1] === 'stages') {
     return sendJson(res, 200, { stages: STAGES, tasks: stageCatalog() })
+  }
+
+  if (segments[1] === 'moodle') {
+    const cfg = moodleConfig(config)
+    const action = segments[2] || ''
+    if (action === 'status' && method === 'GET') {
+      return sendJson(res, 200, { moodle: moodleStatus(cfg) })
+    }
+    if (action === 'check' && method === 'POST') {
+      try {
+        return sendJson(res, 200, { result: await moodleCheck(cfg) })
+      } catch (error) {
+        return sendError(res, 400, String(error?.message || error))
+      }
+    }
+    if (action === 'course' && method === 'GET') {
+      try {
+        const course = await fetchMoodleCourse(cfg, url.searchParams.get('courseId') || '')
+        return sendJson(res, 200, { course: publicMoodleCourse(course) })
+      } catch (error) {
+        return sendError(res, 400, String(error?.message || error))
+      }
+    }
+    if (action === 'import' && method === 'POST') {
+      const body = await readJsonBody(req)
+      try {
+        const result = await importMoodleCourse(COURSE_ROOT, cfg, {
+          id: String(body.id || ''),
+          courseId: String(body.courseId || ''),
+          sections: Array.isArray(body.sections) ? body.sections : [],
+          withSchedule: body.schedule !== false,
+        })
+        await touchCourse(COURSE_ROOT, String(body.id || ''))
+        return sendJson(res, 200, result)
+      } catch (error) {
+        return sendError(res, 400, String(error?.message || error))
+      }
+    }
+    return sendError(res, 404, '未知的 Moodle 接口')
   }
 
   if (segments[1] === 'calendars') {
@@ -375,6 +422,87 @@ async function handleApi(req, res, url) {
   }
 
   return sendError(res, 404, '未知接口')
+}
+
+/**
+ * 把一门 Moodle 课程的课件拉进课程目录的 00_source/，按周次归档成 week-NN/，
+ * 顺手把小节里读到的日期补成课程节点。录音仍然由用户自己放进对应周。
+ */
+async function importMoodleCourse(root, cfg, { id, courseId, sections, withSchedule }) {
+  if (!isCourseId(id)) throw new Error('工作台里的课程 id 不对')
+  const course = await getCourse(root, id)
+  if (!course) throw new Error('课程不存在')
+  const sourceDir = path.join(coursePaths(root, id).dir, '00_source')
+  await fsp.mkdir(sourceDir, { recursive: true })
+
+  const moodle = await fetchMoodleCourse(cfg, courseId)
+  const result = await importMoodleFiles({
+    cfg,
+    course: moodle,
+    destRoot: sourceDir,
+    only: sections.map(String),
+  })
+  const milestones = withSchedule ? await mergeMoodleSchedule(root, id, moodle) : []
+  await writeImportManifest(sourceDir, moodle, result)
+
+  return {
+    moodle: {
+      id: moodle.id,
+      fullname: moodle.fullname,
+      source: moodle.source,
+      sections: moodle.sections.length,
+    },
+    files: result.files,
+    skipped: result.skipped,
+    milestones,
+  }
+}
+
+/** 小节里有日期就补一条课程节点；已有的同日期同标题不动，避免覆盖手工改过的。 */
+async function mergeMoodleSchedule(root, id, moodle) {
+  const course = await getCourse(root, id)
+  if (!course) return []
+  const existing = course.schedule || []
+  const seen = new Set(existing.map((item) => `${item.date}|${item.title}`))
+  const added = []
+  for (const section of moodle.sections) {
+    if (!section.date) continue
+    const title = (section.name || `第 ${section.index} 节`).slice(0, 80)
+    if (seen.has(`${section.date}|${title}`)) continue
+    seen.add(`${section.date}|${title}`)
+    added.push({
+      date: section.date,
+      title,
+      kind: 'lecture',
+      note: `Moodle 导入${section.time ? ' · ' + section.time : ''}`,
+    })
+  }
+  if (!added.length) return []
+  await updateCourse(root, id, { schedule: [...existing, ...added] })
+  return added
+}
+
+async function writeImportManifest(dir, moodle, result) {
+  const lines = [
+    `# Moodle 课件导入 · ${moodle.fullname}`,
+    '',
+    `- 来源：${moodle.source === 'token' ? 'Moodle Web service' : 'Moodle 课程页'}（课程 id ${moodle.id}）`,
+    `- 导入时间：${new Date().toISOString().slice(0, 19).replace('T', ' ')}`,
+    `- 文件：${result.files.length} 个${result.skipped.length ? `，跳过 ${result.skipped.length} 个` : ''}`,
+    '',
+    '| 文件 | 周次 | 来源活动 | 大小 |',
+    '| --- | --- | --- | --- |',
+    ...result.files.map(
+      (file) =>
+        `| \`${file.path}\` | 第 ${file.week} 周 | ${file.module || file.section} | ${formatBytes(file.size)} |`,
+    ),
+  ]
+  if (result.skipped.length) {
+    lines.push('', '## 没拉下来的', '')
+    for (const item of result.skipped) lines.push(`- ${item.name}：${item.reason}`)
+  }
+  lines.push('', '录音还是要自己传：把每节课的录音放进对应的 week-NN/，再跑「盘点新导入的材料」。')
+  await fsp.writeFile(path.join(dir, 'moodle-import.md'), lines.join('\n') + '\n', 'utf8')
 }
 
 async function touchCourse(root, id) {

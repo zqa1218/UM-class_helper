@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { errorMessage, useLoader } from '../loader'
 import type { Course, FileEntry } from '../types'
+import MoodleImport from './MoodleImport'
 import Panel from './Panel'
 
 type StageKey = '00_source' | '10_kb'
@@ -221,6 +222,16 @@ export default function Materials({ course, onChanged, onExtract }: Props) {
             </>
           )}
         </div>
+      )}
+
+      {stage === '00_source' && (
+        <MoodleImport
+          course={course}
+          onImported={() => {
+            void load()
+            onChanged()
+          }}
+        />
       )}
 
       <div

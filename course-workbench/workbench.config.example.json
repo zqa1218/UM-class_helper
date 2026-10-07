@@ -11,6 +11,12 @@
     "maxRounds": 40,
     "maxCommandMs": 300000
   },
+  "moodle": {
+    "baseUrl": "https://ummoodle.um.edu.mo",
+    "include": ["ppt", "pptx", "pdf"],
+    "session": "",
+    "token": ""
+  },
   "codexCommand": "codex",
   "codexSandbox": "workspace-write",
   "codexExtraArgs": []

@@ -11,6 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { buildCalendar, parseIcs } from '../server/calendar.mjs'
+import { parseCourseHtml, parseWhen, weekOf } from '../server/moodle.mjs'
 import { missingArtifacts } from '../server/pipeline.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -57,6 +58,84 @@ check('学期起始日解析正确', term?.teachingStart === '2026-08-17', JSON.
 check('学期结束日解析正确', term?.teachingEnd === '2026-12-05', JSON.stringify(term?.teachingEnd))
 check('假期被识别出来', (term?.holidays || []).some((d) => d.date === '2026-10-01'))
 check('考试周解析出来', term?.examStart === '2026-12-07' && term?.examEnd === '2026-12-12')
+
+// ---- Moodle 课程页解析：结构照抄真实页面，不联网 ----
+const MOODLE_PORT = Number(process.env.SMOKE_MOODLE_PORT || PORT + 2)
+const MOODLE_BASE = `http://127.0.0.1:${MOODLE_PORT}`
+const MOODLE_HTML = [
+  '<!DOCTYPE html><html><head><title>Course: 医学神经科学 | ummoodle</title></head><body>',
+  '<ul class="topics">',
+  '<li id="section-0" class="section course-section main " data-sectionname="课程说明">',
+  '<div class="content"><div class="summarytext"><p>本课程介绍神经系统。</p></div></div>',
+  '<ul class="section img-text">',
+  '<li class="activity forum modtype_forum " id="module-800" data-activityname="答疑区">',
+  '<div class="activity-item" data-activityname="答疑区">',
+  `<a href="${MOODLE_BASE}/mod/forum/view.php?id=800" class="aalink"><span class="instancename">答疑区<span class="accesshide">讨论区</span></span></a>`,
+  '</div></li></ul></li>',
+  '<li id="section-1" class="section course-section main " data-sectionname="第 1 周 · 9月1日 14:00 绪论">',
+  '<div class="content"><div class="summarytext"><p>课件在下面。</p></div></div>',
+  '<ul class="section img-text">',
+  '<li class="activity resource modtype_resource " id="module-809" data-activityname="第1讲 绪论">',
+  '<div class="activity-item" data-activityname="第1讲 绪论">',
+  `<a href="${MOODLE_BASE}/mod/resource/view.php?id=809" class="aalink"><span class="instancename">第1讲 绪论<span class="accesshide">File</span></span></a>`,
+  '</div></li>',
+  '<li class="activity resource modtype_resource " id="module-810" data-activityname="讲义">',
+  '<div class="activity-item" data-activityname="讲义">',
+  `<a href="${MOODLE_BASE}/mod/resource/view.php?id=810" class="aalink"><span class="instancename">讲义<span class="accesshide">File</span></span></a>`,
+  '</div></li>',
+  '</ul></li>',
+  '<li id="section-2" class="section course-section main " data-sectionname="第 2 周 · Week 2">',
+  '<div class="content"><div class="summarytext"><p></p></div></div>',
+  '<ul class="section img-text">',
+  '<li class="activity resource modtype_resource " id="module-811" data-activityname="第2周 课件">',
+  '<div class="activity-item" data-activityname="第2周 课件">',
+  `<a href="${MOODLE_BASE}/mod/resource/view.php?id=811" class="aalink"><span class="instancename">第2周 课件<span class="accesshide">File</span></span></a>`,
+  '</div></li>',
+  '<li class="activity resource modtype_resource " id="module-812">',
+  '<div class="activity-item">',
+  `<a href="${MOODLE_BASE}/mod/resource/view.php?id=812" class="aalink"><span class="instancename">阅读材料<span class="accesshide">File</span></span></a>`,
+  '</div></li>',
+  '</ul></li>',
+  '</ul></body></html>',
+].join('\n')
+
+const parsedSections = parseCourseHtml(MOODLE_HTML)
+check('Moodle 课程页解析出 3 个小节', parsedSections.length === 3, 'got ' + parsedSections.length)
+check(
+  '小节名读得对',
+  parsedSections[1]?.name === '第 1 周 · 9月1日 14:00 绪论',
+  String(parsedSections[1]?.name),
+)
+check('小节里的日期读出来', parsedSections[1]?.date?.endsWith('-09-01'), String(parsedSections[1]?.date))
+check('小节里的时间读出来', parsedSections[1]?.time === '14:00', String(parsedSections[1]?.time))
+check(
+  '活动解析出 modname 与链接',
+  parsedSections[1]?.modules?.[0]?.modname === 'resource' &&
+    parsedSections[1].modules[0].url.includes('id=809'),
+  JSON.stringify(parsedSections[1]?.modules?.[0]),
+)
+check(
+  '活动名抠掉了给读屏用的 File 字样',
+  parsedSections[2]?.modules?.[1]?.name === '阅读材料',
+  String(parsedSections[2]?.modules?.[1]?.name),
+)
+check(
+  '非文件活动也算出来（论坛）',
+  parsedSections[0]?.modules?.[0]?.modname === 'forum',
+  String(parsedSections[0]?.modules?.[0]?.modname),
+)
+
+const when = parseWhen('第 3 周 · 2026-03-05 10:30')
+check('读得出完整日期时间', when.date === '2026-03-05' && when.time === '10:30', JSON.stringify(when))
+check('日/月/年写法认得出', parseWhen('15/03/2026').date === '2026-03-15')
+check('中文月日认得出', parseWhen('9月15日 08:00').date?.endsWith('-09-15'))
+check('英文月份认得出', parseWhen('Mar 7').date?.endsWith('-03-07'))
+check('「Week 1-2」不当日期', parseWhen('Week 1-2').date === '')
+check('「0 / 6」不当日期', parseWhen('0 / 6').date === '')
+check('周次读「第 3 周」', weekOf('第 3 周 · 绪论', 1) === 3, String(weekOf('第 3 周 · 绪论', 1)))
+check('周次读「Week 12」', weekOf('Week 12', 2) === 12, String(weekOf('Week 12', 2)))
+check('周次读「W5」', weekOf('W5 实验课', 3) === 5, String(weekOf('W5 实验课', 3)))
+check('读不出周次就用顺序', weekOf('课程说明', 0) === 0 && weekOf('Total 45 hours', 4) === 4)
 
 // ---- 假的 OpenAI 兼容接口：不联网也能验「工作台自己调 API」这条路 ----
 const API_PORT = Number(process.env.SMOKE_API_PORT || PORT + 1)
@@ -330,6 +409,50 @@ const fakeApi = http.createServer((req, res) => {
 })
 await new Promise((resolve) => fakeApi.listen(API_PORT, '127.0.0.1', resolve))
 
+// ---- 假的 Moodle：cookie 登录 + 课程页 + 一层跳转的 resource 下载 ----
+const MOODLE_FILES = new Map([
+  ['809', '第1讲-绪论.pdf'],
+  ['810', '讲义.pdf'],
+  ['811', '第2周-课件.pptx'],
+  ['812', '阅读材料.docx'],
+])
+const MOODLE_PDF = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n')
+let moodleDownloads = 0
+const fakeMoodle = http.createServer((req, res) => {
+  const url = new URL(req.url, MOODLE_BASE)
+  const cookie = String(req.headers.cookie || '')
+  const html = (status, body) => {
+    res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' })
+    res.end(body)
+  }
+  // 没带会话一律跳 SSO，跟真的 UM Moodle 一样
+  if (!/MoodleSession=smoke-session/.test(cookie)) {
+    res.writeHead(302, { location: 'https://websso.um.edu.mo/adfs/ls/?SAMLRequest=smoke' })
+    return res.end()
+  }
+  if (url.pathname === '/my/') return html(200, '<title>我的主页</title><p>Dashboard</p>')
+  if (url.pathname === '/course/view.php') {
+    if (url.searchParams.get('id') !== '44187') return html(404, '<title>找不到课程</title>')
+    return html(200, MOODLE_HTML)
+  }
+  if (url.pathname === '/mod/resource/view.php') {
+    const name = MOODLE_FILES.get(url.searchParams.get('id') || '')
+    if (!name) return html(404, '<title>没有这个活动</title>')
+    // 真的 Moodle 点开 resource 会 303 到 pluginfile
+    res.writeHead(303, {
+      location: `${MOODLE_BASE}/pluginfile.php/1318/mod_resource/content/1/${encodeURIComponent(name)}`,
+    })
+    return res.end()
+  }
+  if (url.pathname.startsWith('/pluginfile.php/')) {
+    moodleDownloads += 1
+    res.writeHead(200, { 'content-type': 'application/octet-stream' })
+    return res.end(MOODLE_PDF)
+  }
+  return html(404, '<title>没有这个页面</title>')
+})
+await new Promise((resolve) => fakeMoodle.listen(MOODLE_PORT, '127.0.0.1', resolve))
+
 // ---- 起服务 ----
 const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'course-workbench-smoke-'))
 const server = spawn(process.execPath, [path.join(appRoot, 'server/index.mjs')], {
@@ -340,6 +463,8 @@ const server = spawn(process.execPath, [path.join(appRoot, 'server/index.mjs')],
     WORKBENCH_API_BASE_URL: `http://127.0.0.1:${API_PORT}/v1`,
     WORKBENCH_API_MODEL: 'smoke-model',
     WORKBENCH_API_KEY: 'smoke-key',
+    WORKBENCH_MOODLE_BASE_URL: MOODLE_BASE,
+    WORKBENCH_MOODLE_SESSION: 'smoke-session',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
@@ -751,9 +876,114 @@ try {
     '知识点 md 里的小节跟着删掉',
     !(await fsp.readFile(path.join(dir, '06_outline/图片知识点.md'), 'utf8')).includes('note1.png'),
   )
+
+  // ---- Moodle 导入：从课程 id 到 00_source/week-NN/ 的整条路 ----
+  const moodleStatus = await json('/api/moodle/status')
+  check(
+    'Moodle 状态报出 cookie 模式与站点',
+    moodleStatus.body?.moodle?.configured === true &&
+      moodleStatus.body?.moodle?.mode === 'cookie' &&
+      moodleStatus.body?.moodle?.baseUrl === MOODLE_BASE,
+    JSON.stringify(moodleStatus.body),
+  )
+  check(
+    'Moodle 状态不回传凭据',
+    !JSON.stringify(moodleStatus.body).includes('smoke-session'),
+    JSON.stringify(moodleStatus.body),
+  )
+
+  const moodlePing = await json('/api/moodle/check', { method: 'POST' })
+  check(
+    'Moodle 连接自检通过',
+    moodlePing.body?.result?.ok === true && moodlePing.body?.result?.site === '我的主页',
+    JSON.stringify(moodlePing.body),
+  )
+
+  const badId = await json('/api/moodle/course?courseId=abc')
+  check('课程 id 不是数字时报 400', badId.status === 400, String(badId.status))
+
+  const noCourse = await json('/api/moodle/course?courseId=99999')
+  check(
+    '读不到课程页时报 400 并说清原因',
+    noCourse.status === 400 && /小节|课程 id/.test(String(noCourse.body?.error)),
+    String(noCourse.body?.error),
+  )
+
+  const preview = await json('/api/moodle/course?courseId=44187')
+  check(
+    '预览读到课程名',
+    preview.body?.course?.fullname === '医学神经科学',
+    JSON.stringify(preview.body?.course?.fullname),
+  )
+  check('预览读到 3 个小节', preview.body?.course?.sections?.length === 3, JSON.stringify(preview.body?.course?.sections?.length))
+  check('预览里带每节课的日期时间', preview.body?.course?.sections?.[1]?.time === '14:00')
+  check(
+    '预览里列得出要拉的文件名',
+    preview.body?.course?.sections?.[1]?.modules?.[0]?.files?.[0]?.name === '第1讲-绪论.pdf',
+    JSON.stringify(preview.body?.course?.sections?.[1]?.modules),
+  )
+  check('预览不把下载地址带出来', !JSON.stringify(preview.body).includes('pluginfile'))
+
+  const imported = await json('/api/moodle/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id, courseId: '44187', sections: [1, 2], schedule: true }),
+  })
+  check('Moodle 导入返回 200', imported.status === 200, JSON.stringify(imported.body))
+  check('拉了 3 个课件（docx 不要）', imported.body?.files?.length === 3, JSON.stringify(imported.body?.files))
+  check(
+    '文件按周次归档',
+    (imported.body?.files || []).every((file) => /^week-0[12]\//.test(file.path)),
+    JSON.stringify((imported.body?.files || []).map((file) => file.path)),
+  )
+  check(
+    'PPT 也拉下来了',
+    (imported.body?.files || []).some((file) => file.path.endsWith('.pptx') && file.size > 0),
+    JSON.stringify(imported.body?.files),
+  )
+  check(
+    '第 1 周的 PDF 落盘',
+    !!(await fsp.stat(path.join(dir, '00_source/week-01/第1讲-绪论.pdf')).catch(() => null)),
+  )
+  check(
+    '第 2 周的 PPT 落盘',
+    !!(await fsp.stat(path.join(dir, '00_source/week-02/第2周-课件.pptx')).catch(() => null)),
+  )
+  const manifest = await fsp.readFile(path.join(dir, '00_source/moodle-import.md'), 'utf8')
+  check('导入清单写出来了', manifest.includes('Moodle 课件导入') && manifest.includes('第1讲-绪论.pdf'))
+  check('清单里留了「录音自己传」的话', manifest.includes('录音还是要自己传'))
+  check('导入报告补了 1 个上课节点', imported.body?.milestones?.length === 1, JSON.stringify(imported.body?.milestones))
+  const afterImport = await json(`/api/courses/${id}`)
+  check(
+    '读到的日期写进时间轴',
+    (afterImport.body?.course?.schedule || []).some(
+      (node) => node.date.endsWith('-09-01') && node.kind === 'lecture',
+    ),
+    JSON.stringify((afterImport.body?.course?.schedule || []).map((node) => node.date)),
+  )
+
+  const reimport = await json('/api/moodle/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id, courseId: '44187', sections: [1, 2] }),
+  })
+  check(
+    '重跑不覆盖同名文件',
+    reimport.body?.files?.length === 0 && reimport.body?.skipped?.length === 3,
+    JSON.stringify(reimport.body),
+  )
+  check('重跑不重复加时间轴节点', reimport.body?.milestones?.length === 0, JSON.stringify(reimport.body?.milestones))
+
+  const partial = await json('/api/moodle/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'nope', courseId: '44187' }),
+  })
+  check('课程 id 不对时报 400', partial.status === 400, String(partial.status))
 } finally {
   server.kill()
   fakeApi.close()
+  fakeMoodle.close()
   await fsp.rm(tmp, { recursive: true, force: true })
 }
 
